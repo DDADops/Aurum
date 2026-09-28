@@ -1,3 +1,4 @@
+import { financialChartValue, knownFinancialValue } from "@/lib/financialData";
 import { useState } from "react";
 import { MonthSelector } from "@/components/layout/MonthSelector";
 import { YearSelector } from "@/components/layout/YearSelector";
@@ -29,7 +30,12 @@ export function DashboardPage() {
   const { data: years } = useTransactionYears();
 
   const { data, isLoading, isError } = useDashboardSummary(year, month);
-  const rate = data ? savingsRate(Number(data.real_income), Number(data.net)) : null;
+  const income = knownFinancialValue(data?.real_income);
+  const spent = knownFinancialValue(data?.spent);
+  const net = knownFinancialValue(data?.net);
+  const incomeNumber = financialChartValue(income);
+  const netNumber = financialChartValue(net);
+  const rate = incomeNumber !== null && netNumber !== null ? savingsRate(incomeNumber, netNumber) : null;
 
   return (
     <div className="space-y-5">
@@ -51,21 +57,21 @@ export function DashboardPage() {
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard
           label={t("dashboard.statRealIncomeLabel")}
-          value={isLoading ? "…" : formatCurrency(data?.real_income ?? 0)}
+          value={isLoading ? "…" : income === null ? t("financial.unknown") : formatCurrency(income)}
           caption={t("dashboard.statRealIncomeCaption")}
           tone="success"
         />
         <StatCard
           label={t("dashboard.statSpentLabel")}
-          value={isLoading ? "…" : formatCurrency(data?.spent ?? 0)}
+          value={isLoading ? "…" : spent === null ? t("financial.unknown") : formatCurrency(spent)}
           caption={t("dashboard.statSpentCaption")}
           tone="danger"
         />
         <StatCard
           label={t("dashboard.statNetLabel")}
-          value={isLoading ? "…" : formatSignedCurrency(data?.net ?? 0)}
+          value={isLoading ? "…" : net === null ? t("financial.unknown") : formatSignedCurrency(net)}
           caption={t("dashboard.statNetCaption")}
-          tone={Number(data?.net ?? 0) >= 0 ? "success" : "danger"}
+          tone={netNumber === null ? "default" : netNumber >= 0 ? "success" : "danger"}
         />
         <StatCard
           label={t("dashboard.statSavingsRateLabel")}

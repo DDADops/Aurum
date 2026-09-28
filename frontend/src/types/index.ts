@@ -1,3 +1,42 @@
+// Shared contracts for endpoints as they adopt explicit financial completeness.
+// Existing endpoint types stay unchanged until their consumers are migrated.
+export interface MissingRate {
+  base_currency: string;
+  quote_currency: string;
+  requested_date: string;
+  reason: "absent" | "stale" | "precision_unrepresentable";
+  max_age_days: number;
+  latest_available_date: string | null;
+}
+
+export type KnownFinancialDataIssueCode =
+  | "transfer_amount_unresolved"
+  | "transfer_destination_missing"
+  | "crypto_quote_currency_unknown"
+  | "valuation_currency_unconfirmed"
+  | "valuation_missing"
+  | "price_missing";
+
+export interface FinancialDataIssue {
+  // Unknown server codes use the same safe, generic reconciliation message.
+  code: KnownFinancialDataIssueCode | (string & {});
+}
+
+export interface FinancialDataStatus {
+  complete: boolean;
+  missing_rates: MissingRate[];
+  data_issues: FinancialDataIssue[];
+}
+
+export type MetricStatus<Metric extends string = string> = Partial<Record<Metric, FinancialDataStatus>>;
+
+export interface FinancialResponseStatus<Metric extends string = string> extends FinancialDataStatus {
+  currency: string;
+  metric_status?: MetricStatus<Metric>;
+}
+
+export type FinancialValue = string | number | null | undefined;
+
 export type AccountType = "checking" | "debit_card" | "savings" | "credit_card" | "cash" | "investment" | "other";
 export type CategoryKind = "income" | "expense";
 export type TransactionType = "income" | "expense" | "transfer";

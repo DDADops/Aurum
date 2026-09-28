@@ -5,6 +5,14 @@ export type Language = "ru" | "en";
 const STORAGE_KEY = "aurum:language";
 
 const ru = {
+  "financial.incomplete": "Финансовые данные неполны",
+  "financial.rateUnavailable": "Курс валют недоступен",
+  "financial.rateStale": "Курс валют устарел",
+  "financial.reconciliation": "Финансовая запись требует уточнения",
+  "financial.valuationUnavailable": "Оценка стоимости недоступна",
+  "financial.unknown": "Значение неизвестно",
+  "financial.moreIssues": "Других причин: {{count}}",
+
   "nav.dashboard": "Дашборд",
   "nav.netWorth": "Капитал",
   "nav.crypto": "Криптовалюта",
@@ -530,6 +538,14 @@ const ru = {
 };
 
 const en: Record<keyof typeof ru, string> = {
+  "financial.incomplete": "Financial data is incomplete",
+  "financial.rateUnavailable": "Exchange rate unavailable",
+  "financial.rateStale": "Exchange rate is too old",
+  "financial.reconciliation": "Financial record requires reconciliation",
+  "financial.valuationUnavailable": "Valuation unavailable",
+  "financial.unknown": "Value unknown",
+  "financial.moreIssues": "Other reasons: {{count}}",
+
   "nav.dashboard": "Dashboard",
   "nav.netWorth": "Net Worth",
   "nav.crypto": "Crypto",

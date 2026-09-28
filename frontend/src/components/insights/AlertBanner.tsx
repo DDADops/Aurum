@@ -1,3 +1,4 @@
+import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { TriangleAlert } from "lucide-react";
 import { useFinancialAlerts } from "@/hooks/useInsights";
 import { useTranslation, type TranslationKey } from "@/lib/i18n";
@@ -42,6 +43,8 @@ export function AlertBanner({ excludeKeys }: AlertBannerProps = {}) {
   const { data } = useFinancialAlerts();
   const { t } = useTranslation();
   const alerts = (data?.alerts ?? []).filter((alert) => !excludeKeys?.includes(alert.key));
+
+  if (data?.complete === false) return <FinancialDataStatus status={data} />;
 
   if (alerts.length === 0) return null;
 

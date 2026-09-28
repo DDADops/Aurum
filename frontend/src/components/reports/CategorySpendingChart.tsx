@@ -1,3 +1,4 @@
+import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { formatCurrency, getIntlLocale, pluralizeRu } from "@/lib/format";
@@ -53,6 +54,10 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: Array<{
 
 export function CategorySpendingChart({ report, isLoading }: CategorySpendingChartProps) {
   const { t, language } = useTranslation();
+  if (report && (!report.complete || report.total_amount === null || report.average_per_month === null)) {
+    return <FinancialDataStatus status={report} />;
+  }
+
   const chartData = report?.series.map((point) => ({
     key: monthKey(point.year, point.month),
     amount: Number(point.amount),
@@ -65,11 +70,11 @@ export function CategorySpendingChart({ report, isLoading }: CategorySpendingCha
         <div>
           <CardTitle>{report ? translateCategoryName(report.category_name) : t("reports.defaultChartTitle")}</CardTitle>
           <p className="mt-1.5 text-2xl font-semibold tabular-nums text-text-primary sm:text-[28px]">
-            {isLoading || !report ? "…" : formatCurrency(report.total_amount)}
+            {isLoading || !report ? "…" : (report.total_amount === null ? t("financial.unknown") : formatCurrency(report.total_amount, report.currency))}
           </p>
           {report && (
             <p className="mt-1 text-sm text-text-muted">
-              {t("reports.averagePerMonth", { amount: formatCurrency(report.average_per_month) })} ·{" "}
+              {t("reports.averagePerMonth", { amount: (report.average_per_month === null ? t("financial.unknown") : formatCurrency(report.average_per_month, report.currency)) })} ·{" "}
               {report.transaction_count} {transactionsCountLabel(report.transaction_count, language)}
             </p>
           )}

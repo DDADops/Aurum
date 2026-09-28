@@ -19,6 +19,8 @@ from app.models.enums import TransactionType
 from app.models.transaction import Transaction
 from app.schemas.advice import AdviceItem, AdviceResponse
 from app.services.dashboard_service import get_dashboard_summary
+from app.services.settings_service import get_or_create_app_settings
+from app.services.financial_data_service import transaction_status
 
 TRAILING_MONTHS = 3
 RISING_CATEGORY_THRESHOLD_PERCENT = 25
@@ -141,6 +143,14 @@ async def _savings_rate_trend_advice(session: AsyncSession, year: int, month: in
 
 async def get_advice(session: AsyncSession) -> AdviceResponse:
     today = date.today()
+    currency = (await get_or_create_app_settings(session)).currency
+    start_year, start_month = today.year, today.month
+    for _ in range(TRAILING_MONTHS):
+        start_year, start_month = _previous_month(start_year, start_month)
+    _, end = _month_bounds(today.year, today.month)
+    status = await transaction_status(session, currency, start_date=date(start_year, start_month, 1), end_date=end)
+    if not status.complete:
+        return AdviceResponse(currency=currency, **status.model_dump(), items=[])
     generators = (_rising_category_advice, _unbudgeted_top_category_advice, _savings_rate_trend_advice)
 
     items: list[AdviceItem] = []
@@ -149,4 +159,4 @@ async def get_advice(session: AsyncSession) -> AdviceResponse:
         if item is not None:
             items.append(item)
 
-    return AdviceResponse(items=items)
+    return AdviceResponse(currency=currency, items=items)

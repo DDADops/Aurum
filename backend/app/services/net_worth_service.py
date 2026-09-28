@@ -35,6 +35,8 @@ from app.schemas.net_worth import (
     RiskLevelItem,
     RiskLevelSummary,
 )
+from app.services.financial_data_service import capital_status
+from app.services.settings_service import get_or_create_app_settings
 
 CASH_ACCOUNT_TYPES = {
     AccountType.CHECKING,
@@ -244,6 +246,8 @@ def _resolve_start_date(range_key: str, cash_events: list[tuple[date_, Decimal]]
 
 async def get_net_worth_summary(session: AsyncSession, range_key: str) -> NetWorthSummary:
     today = date_.today()
+    currency = (await get_or_create_app_settings(session)).currency
+    status = await capital_status(session, currency, account_types=CASH_ACCOUNT_TYPES)
     cash_events = await _cash_cumulative_events(session)
     asset_events, class_totals, current_by_asset = await _asset_events_and_class_totals(session)
     capital_roles = await _capital_role_summary(session, current_by_asset)
@@ -255,6 +259,17 @@ async def get_net_worth_summary(session: AsyncSession, range_key: str) -> NetWor
     series = [
         NetWorthPoint(date=c.date, value=c.value + a.value) for c, a in zip(cash_series, asset_series, strict=True)
     ]
+
+    if not status.complete:
+        return NetWorthSummary(
+            currency=currency, **status.model_dump(), range=range_key, current=None,
+            change_amount=None, change_percent=None,
+            series=[NetWorthPoint(
+                date=p.date, value=None, complete=False, data_issues=status.data_issues,
+                missing_rates=[rate.model_copy(update={"requested_date": p.date}) for rate in status.missing_rates],
+            ) for p in series],
+            breakdown=[], capital_roles=[], risk_levels=[],
+        )
 
     current = series[-1].value if series else Decimal("0")
     start_value = series[0].value if series else Decimal("0")
@@ -281,6 +296,7 @@ async def get_net_worth_summary(session: AsyncSession, range_key: str) -> NetWor
         )
 
     return NetWorthSummary(
+        currency=currency,
         range=range_key,
         current=current,
         change_amount=change_amount,

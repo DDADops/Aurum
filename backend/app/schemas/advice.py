@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.schemas.money import FinancialResponseStatus
+
 
 class AdviceItem(BaseModel):
     key: str
@@ -11,5 +13,5 @@ class AdviceItem(BaseModel):
     params: dict[str, str | int | float]
 
 
-class AdviceResponse(BaseModel):
+class AdviceResponse(FinancialResponseStatus):
     items: list[AdviceItem]

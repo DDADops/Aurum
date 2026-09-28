@@ -1,3 +1,4 @@
+import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { financialChartValue, knownFinancialValue } from "@/lib/financialData";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ArrowDown, ArrowUp } from "lucide-react";
@@ -54,11 +55,11 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: Array<{
 
 export function NetWorthChart({ summary, isLoading, range, onRangeChange }: NetWorthChartProps) {
   const { t } = useTranslation();
-  const current = knownFinancialValue(summary?.current);
-  const change = financialChartValue(summary?.change_amount);
+  const current = knownFinancialValue(summary?.current, summary);
+  const change = financialChartValue(summary?.change_amount, summary);
   const isPositive = change !== null && change >= 0;
   const trendColor = change === null ? "var(--text-muted)" : isPositive ? "var(--success)" : "var(--danger)";
-  const chartData = summary?.series.map((point) => ({ date: point.date, value: financialChartValue(point.value) })) ?? [];
+  const chartData = summary?.series.map((point) => ({ date: point.date, value: financialChartValue(point.value, point) })) ?? [];
   const yearTicks = computeYearTicks(chartData.map((point) => point.date));
 
   return (
@@ -67,7 +68,7 @@ export function NetWorthChart({ summary, isLoading, range, onRangeChange }: NetW
         <div>
           <CardTitle>{t("nav.netWorth")}</CardTitle>
           <p className="mt-1.5 text-2xl font-semibold tabular-nums text-text-primary sm:text-[28px]">
-            {isLoading ? "…" : current === null ? t("financial.unknown") : formatCurrency(current)}
+            {isLoading ? "…" : current === null ? t("financial.unknown") : formatCurrency(current, summary?.currency)}
           </p>
           {summary && change !== null && (
             <p
@@ -75,7 +76,7 @@ export function NetWorthChart({ summary, isLoading, range, onRangeChange }: NetW
               style={{ color: trendColor }}
             >
               {isPositive ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
-              {formatSignedCurrency(summary.change_amount)}
+              {formatSignedCurrency(change, summary.currency)}
               {summary.change_percent != null && ` (${isPositive ? "+" : ""}${summary.change_percent.toFixed(1)}%)`}
               <span className="font-normal text-text-muted">{t("netWorth.periodSuffix")}</span>
             </p>
@@ -83,6 +84,7 @@ export function NetWorthChart({ summary, isLoading, range, onRangeChange }: NetW
         </div>
         <RangeSelector value={range} onChange={onRangeChange} />
       </CardHeader>
+      {summary && !summary.complete && <FinancialDataStatus status={summary} className="px-5" />}
       <CardContent>
         <div className="h-56 w-full sm:h-64">
           {isLoading || chartData.length === 0 ? (

@@ -2,6 +2,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.money import FinancialResponseStatus
+
 
 class CategoryBreakdownChildItem(BaseModel):
     """One subcategory's (or the parent's own direct, un-subcategorized)
@@ -28,11 +30,11 @@ class CategoryBreakdownItem(BaseModel):
     children: list[CategoryBreakdownChildItem] = Field(default_factory=list)
 
 
-class DashboardSummary(BaseModel):
+class DashboardSummary(FinancialResponseStatus):
     year: int
     month: int
-    real_income: Decimal
-    spent: Decimal
-    net: Decimal
-    transferred_out: Decimal
+    real_income: Decimal | None
+    spent: Decimal | None
+    net: Decimal | None
+    transferred_out: Decimal | None
     spending_by_category: list[CategoryBreakdownItem]

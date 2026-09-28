@@ -28,7 +28,11 @@ async def test_debit_card_is_a_liquid_account_type(client: AsyncClient, categori
     )
     assert transaction.status_code == 201
 
+    # This test checks liquidity, not an unsupported RUB -> USD conversion.
+    await client.patch("/settings", json={"currency": "RUB"})
     summary = await client.get("/net-worth/summary", params={"range": "all"})
 
     assert summary.status_code == 200
+    assert summary.json()["complete"] is True
+    assert summary.json()["currency"] == "RUB"
     assert money(summary.json()["current"]) == money("1000.00")

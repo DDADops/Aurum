@@ -10,6 +10,8 @@ from app.models.enums import TransactionType
 from app.models.transaction import Transaction
 from app.schemas.dashboard import CategoryBreakdownChildItem, CategoryBreakdownItem, DashboardSummary
 from app.services.category_rollup import rollup_spending_by_top_level_category
+from app.services.settings_service import get_or_create_app_settings
+from app.services.financial_data_service import transaction_status, merge_statuses
 
 # Categorical slots are capped at 8 (dataviz skill: a 9th series folds into "Other",
 # never a generated hue) — this is also the exact size of the default category set.
@@ -24,6 +26,15 @@ def _month_bounds(year: int, month: int) -> tuple[date, date]:
 
 async def get_dashboard_summary(session: AsyncSession, year: int, month: int) -> DashboardSummary:
     start, end = _month_bounds(year, month)
+    currency = (await get_or_create_app_settings(session)).currency
+    statuses = {}
+    for metric, kind in (("real_income", TransactionType.INCOME), ("spent", TransactionType.EXPENSE),
+                         ("transferred_out", TransactionType.TRANSFER)):
+        statuses[metric] = await transaction_status(
+            session, currency, start_date=start, end_date=end, transaction_type=kind)
+    statuses["net"] = merge_statuses(statuses["real_income"], statuses["spent"])
+    statuses["spending_by_category"] = statuses["spent"]
+    status = merge_statuses(*statuses.values())
 
     totals_stmt = (
         select(Transaction.type, func.coalesce(func.sum(Transaction.amount), 0))
@@ -75,11 +86,12 @@ async def get_dashboard_summary(session: AsyncSession, year: int, month: int) ->
         )
 
     return DashboardSummary(
+        currency=currency, metric_status=statuses, **status.model_dump(),
         year=year,
         month=month,
-        real_income=real_income,
-        spent=spent,
-        net=real_income - spent,
-        transferred_out=transferred_out,
-        spending_by_category=spending_by_category,
+        real_income=real_income if statuses["real_income"].complete else None,
+        spent=spent if statuses["spent"].complete else None,
+        net=real_income - spent if statuses["net"].complete else None,
+        transferred_out=transferred_out if statuses["transferred_out"].complete else None,
+        spending_by_category=spending_by_category if statuses["spent"].complete else [],
     )

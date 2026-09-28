@@ -1,3 +1,4 @@
+import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { financialChartValue, knownFinancialValue } from "@/lib/financialData";
 import { useState } from "react";
 import { MonthSelector } from "@/components/layout/MonthSelector";
@@ -30,9 +31,9 @@ export function DashboardPage() {
   const { data: years } = useTransactionYears();
 
   const { data, isLoading, isError } = useDashboardSummary(year, month);
-  const income = knownFinancialValue(data?.real_income);
-  const spent = knownFinancialValue(data?.spent);
-  const net = knownFinancialValue(data?.net);
+  const income = knownFinancialValue(data?.real_income, data?.metric_status?.real_income ?? data);
+  const spent = knownFinancialValue(data?.spent, data?.metric_status?.spent ?? data);
+  const net = knownFinancialValue(data?.net, data?.metric_status?.net ?? data);
   const incomeNumber = financialChartValue(income);
   const netNumber = financialChartValue(net);
   const rate = incomeNumber !== null && netNumber !== null ? savingsRate(incomeNumber, netNumber) : null;
@@ -54,22 +55,24 @@ export function DashboardPage() {
         </p>
       )}
 
+      {data && !data.complete && <FinancialDataStatus status={data} />}
+
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard
           label={t("dashboard.statRealIncomeLabel")}
-          value={isLoading ? "…" : income === null ? t("financial.unknown") : formatCurrency(income)}
+          value={isLoading ? "…" : income === null ? t("financial.unknown") : formatCurrency(income, data?.currency)}
           caption={t("dashboard.statRealIncomeCaption")}
           tone="success"
         />
         <StatCard
           label={t("dashboard.statSpentLabel")}
-          value={isLoading ? "…" : spent === null ? t("financial.unknown") : formatCurrency(spent)}
+          value={isLoading ? "…" : spent === null ? t("financial.unknown") : formatCurrency(spent, data?.currency)}
           caption={t("dashboard.statSpentCaption")}
           tone="danger"
         />
         <StatCard
           label={t("dashboard.statNetLabel")}
-          value={isLoading ? "…" : net === null ? t("financial.unknown") : formatSignedCurrency(net)}
+          value={isLoading ? "…" : net === null ? t("financial.unknown") : formatSignedCurrency(net, data?.currency)}
           caption={t("dashboard.statNetCaption")}
           tone={netNumber === null ? "default" : netNumber >= 0 ? "success" : "danger"}
         />
@@ -82,7 +85,9 @@ export function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
-        <SpendingByCategoryCard items={data?.spending_by_category ?? []} />
+        {data?.metric_status?.spending_by_category?.complete === false ? (
+          <FinancialDataStatus status={data.metric_status.spending_by_category} />
+        ) : <SpendingByCategoryCard items={data?.spending_by_category ?? []} />}
         <RecentTransactionsCard year={year} month={month} />
       </div>
     </div>

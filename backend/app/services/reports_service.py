@@ -23,6 +23,8 @@ from app.schemas.reports import (
     CategorySpendingReport,
 )
 from app.services.category_rollup import rollup_spending_by_top_level_category
+from app.services.settings_service import get_or_create_app_settings
+from app.services.financial_data_service import transaction_status
 
 
 def _next_month(year: int, month: int) -> tuple[int, int]:
@@ -32,6 +34,7 @@ def _next_month(year: int, month: int) -> tuple[int, int]:
 async def get_category_spending_report(
     session: AsyncSession, category_id: int, start_date: date_ | None, end_date: date_ | None
 ) -> CategorySpendingReport:
+    currency = (await get_or_create_app_settings(session)).currency
     category = await session.get(Category, category_id)
     if category is None:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -69,6 +72,7 @@ async def get_category_spending_report(
     contributions = [(r[0], r[1], r[2]) for r in plain_rows] + [(r[0], r[1], r[2]) for r in split_rows]
 
     empty = CategorySpendingReport(
+        currency=currency,
         category_id=category.id,
         category_name=category.name,
         category_color=category.color,
@@ -86,6 +90,19 @@ async def get_category_spending_report(
     dates = [txn_date for _, txn_date, _ in contributions]
     effective_start = start_date or min(dates)
     effective_end = end_date or max(dates)
+
+    status = await transaction_status(
+        session, currency, start_date=start_date, end_date=end_date,
+        transaction_type=_KIND_TO_TRANSACTION_TYPE[category.kind],
+        category_ids=category_ids,
+    )
+    if not status.complete:
+        return CategorySpendingReport(
+            currency=currency, **status.model_dump(), category_id=category.id,
+            category_name=category.name, category_color=category.color, category_icon=category.icon,
+            start_date=effective_start, end_date=effective_end, total_amount=None,
+            transaction_count=len({row[0] for row in contributions}), average_per_month=None, series=[],
+        )
 
     by_month: dict[tuple[int, int], Decimal] = defaultdict(Decimal)
     for _, txn_date, amount in contributions:
@@ -107,6 +124,7 @@ async def get_category_spending_report(
     average_per_month = (total_amount / months_count).quantize(Decimal("0.01")) if months_count else Decimal("0")
 
     return CategorySpendingReport(
+        currency=currency,
         category_id=category.id,
         category_name=category.name,
         category_color=category.color,
@@ -139,6 +157,13 @@ async def get_category_ranking_report(
     # enough — no separate kind filter needed, and the shared rollup already
     # unions plain transactions with split lines the same way the Dashboard
     # breakdown does.
+    currency = (await get_or_create_app_settings(session)).currency
+    status = await transaction_status(
+        session, currency, start_date=start_date, end_date=end_date,
+        transaction_type=_KIND_TO_TRANSACTION_TYPE[kind], categorized_only=True)
+    if not status.complete:
+        return CategoryRankingReport(currency=currency, **status.model_dump(), start_date=start_date,
+                                     end_date=end_date, total_amount=None, items=[])
     rows = await rollup_spending_by_top_level_category(
         session, transaction_type=_KIND_TO_TRANSACTION_TYPE[kind], start_date=start_date, end_date=end_date
     )
@@ -167,4 +192,4 @@ async def get_category_ranking_report(
         for row in rows
     ]
 
-    return CategoryRankingReport(start_date=start_date, end_date=end_date, total_amount=total_amount, items=items)
+    return CategoryRankingReport(currency=currency, start_date=start_date, end_date=end_date, total_amount=total_amount, items=items)

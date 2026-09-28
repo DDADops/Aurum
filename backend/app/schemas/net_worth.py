@@ -3,10 +3,12 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 
+from app.schemas.money import FinancialResponseStatus, FinancialDataStatus
 
-class NetWorthPoint(BaseModel):
+
+class NetWorthPoint(FinancialDataStatus):
     date: date_
-    value: Decimal
+    value: Decimal | None
 
 
 class NetWorthBreakdownItem(BaseModel):
@@ -55,10 +57,10 @@ class RiskLevelSummary(BaseModel):
     items: list[RiskLevelItem]
 
 
-class NetWorthSummary(BaseModel):
+class NetWorthSummary(FinancialResponseStatus):
     range: str
-    current: Decimal
-    change_amount: Decimal
+    current: Decimal | None
+    change_amount: Decimal | None
     change_percent: float | None
     series: list[NetWorthPoint]
     breakdown: list[NetWorthBreakdownItem]

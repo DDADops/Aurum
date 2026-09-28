@@ -1,3 +1,4 @@
+import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { Bar, BarChart, Legend, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { formatCurrency, formatSignedCurrency, getIntlLocale } from "@/lib/format";
@@ -78,6 +79,11 @@ export function CashFlowChart({ cashFlow, isLoading }: CashFlowChartProps) {
   const expenseLabel = t("cashFlow.expense");
   const netLabel = t("cashFlow.net");
 
+  if (cashFlow && (!cashFlow.complete || cashFlow.total_income === null ||
+      cashFlow.total_expense === null || cashFlow.total_net === null)) {
+    return <FinancialDataStatus status={cashFlow} />;
+  }
+
   const chartData: ChartPoint[] =
     cashFlow?.points.map((point) => ({
       key: monthKey(point.year, point.month),
@@ -93,16 +99,16 @@ export function CashFlowChart({ cashFlow, isLoading }: CashFlowChartProps) {
         <div>
           <CardTitle>{t("nav.cashFlow")}</CardTitle>
           <p className="mt-1.5 text-2xl font-semibold tabular-nums text-text-primary sm:text-[28px]">
-            {isLoading || !cashFlow ? "…" : formatSignedCurrency(cashFlow.total_net)}
+            {isLoading || !cashFlow ? "…" : (cashFlow.total_net === null ? t("financial.unknown") : formatSignedCurrency(cashFlow.total_net, cashFlow.currency))}
           </p>
           {cashFlow && (
             <p className="mt-1 text-sm">
               <span className="font-medium text-success">
-                {incomeLabel} {formatCurrency(cashFlow.total_income)}
+                {incomeLabel} {(cashFlow.total_income === null ? t("financial.unknown") : formatCurrency(cashFlow.total_income, cashFlow.currency))}
               </span>
               <span className="text-text-muted"> · </span>
               <span className="font-medium text-danger">
-                {expenseLabel} {formatCurrency(cashFlow.total_expense)}
+                {expenseLabel} {(cashFlow.total_expense === null ? t("financial.unknown") : formatCurrency(cashFlow.total_expense, cashFlow.currency))}
               </span>
             </p>
           )}

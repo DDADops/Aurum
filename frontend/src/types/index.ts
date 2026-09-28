@@ -1,5 +1,5 @@
 // Shared contracts for endpoints as they adopt explicit financial completeness.
-// Existing endpoint types stay unchanged until their consumers are migrated.
+// Endpoint types adopt these contracts together with their consumers.
 export interface MissingRate {
   base_currency: string;
   quote_currency: string;
@@ -222,13 +222,13 @@ export interface CategoryBreakdownItem {
   children: CategoryBreakdownChildItem[];
 }
 
-export interface DashboardSummary {
+export interface DashboardSummary extends FinancialResponseStatus {
   year: number;
   month: number;
-  real_income: string;
-  spent: string;
-  net: string;
-  transferred_out: string;
+  real_income: string | null;
+  spent: string | null;
+  net: string | null;
+  transferred_out: string | null;
   spending_by_category: CategoryBreakdownItem[];
 }
 
@@ -276,9 +276,9 @@ export interface AssetValuationInput {
   as_of_date: string;
 }
 
-export interface NetWorthPoint {
+export interface NetWorthPoint extends FinancialDataStatus {
   date: string;
-  value: string;
+  value: string | null;
 }
 
 export interface NetWorthBreakdownItem {
@@ -315,10 +315,10 @@ export interface RiskLevelSummary {
   items: RiskLevelItem[];
 }
 
-export interface NetWorthSummary {
+export interface NetWorthSummary extends FinancialResponseStatus {
   range: NetWorthRange;
-  current: string;
-  change_amount: string;
+  current: string | null;
+  change_amount: string | null;
   change_percent: number | null;
   series: NetWorthPoint[];
   breakdown: NetWorthBreakdownItem[];
@@ -332,16 +332,16 @@ export interface CategorySpendingPoint {
   amount: string;
 }
 
-export interface CategorySpendingReport {
+export interface CategorySpendingReport extends FinancialResponseStatus {
   category_id: number;
   category_name: string;
   category_color: string;
   category_icon: string | null;
   start_date: string | null;
   end_date: string | null;
-  total_amount: string;
+  total_amount: string | null;
   transaction_count: number;
-  average_per_month: string;
+  average_per_month: string | null;
   series: CategorySpendingPoint[];
 }
 
@@ -353,13 +353,13 @@ export interface CashFlowPoint {
   net: string;
 }
 
-export interface CashFlowResponse {
+export interface CashFlowResponse extends FinancialResponseStatus {
   start_date: string | null;
   end_date: string | null;
   points: CashFlowPoint[];
-  total_income: string;
-  total_expense: string;
-  total_net: string;
+  total_income: string | null;
+  total_expense: string | null;
+  total_net: string | null;
 }
 
 export interface CategoryRankingChildItem {
@@ -381,10 +381,10 @@ export interface CategoryRankingItem {
   children: CategoryRankingChildItem[];
 }
 
-export interface CategoryRankingReport {
+export interface CategoryRankingReport extends FinancialResponseStatus {
   start_date: string | null;
   end_date: string | null;
-  total_amount: string;
+  total_amount: string | null;
   items: CategoryRankingItem[];
 }
 
@@ -450,7 +450,7 @@ export interface AdviceItem {
   params: Record<string, string | number>;
 }
 
-export interface AdviceResponse {
+export interface AdviceResponse extends FinancialResponseStatus {
   items: AdviceItem[];
 }
 
@@ -609,3 +609,7 @@ export interface AppSettings {
   app_version: string;
 }
 
+
+export interface AlertsResponse extends FinancialResponseStatus {
+  alerts: FinancialAlert[];
+}

@@ -1,3 +1,4 @@
+import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { Lightbulb, TrendingUp, TriangleAlert } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { useAdvice } from "@/hooks/useAdvice";
@@ -59,6 +60,8 @@ export function AdvicePage() {
         <CardContent>
           {isLoading ? (
             <p className="py-10 text-center text-sm text-text-muted">{t("common.loading")}</p>
+          ) : data?.complete === false ? (
+            <FinancialDataStatus status={data} />
           ) : items.length === 0 ? (
             <p className="py-10 text-center text-sm text-text-muted">{t("advice.empty")}</p>
           ) : (

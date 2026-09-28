@@ -1,3 +1,4 @@
+import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -145,7 +146,7 @@ export function ReportsPage() {
 
       <CategorySpendingChart report={report} isLoading={isReportLoading} />
 
-      <CategoryRankingCard
+      {ranking?.complete === false ? <FinancialDataStatus status={ranking} /> : <CategoryRankingCard
         items={ranking?.items ?? []}
         isLoading={isRankingLoading}
         selectedCategoryId={categoryId}
@@ -153,7 +154,7 @@ export function ReportsPage() {
           setCategoryId(id);
           setPage(1);
         }}
-      />
+      />}
 
       <Card>
         <CardHeader>

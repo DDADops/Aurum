@@ -1,5 +1,7 @@
 from pydantic import BaseModel
 
+from app.schemas.money import FinancialResponseStatus
+
 
 class FinancialAlert(BaseModel):
     key: str
@@ -10,5 +12,5 @@ class FinancialAlert(BaseModel):
     params: dict[str, int]
 
 
-class AlertsResponse(BaseModel):
+class AlertsResponse(FinancialResponseStatus):
     alerts: list[FinancialAlert]

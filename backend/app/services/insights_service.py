@@ -28,6 +28,8 @@ from app.services.dashboard_service import get_dashboard_summary
 from app.services.net_worth_service import get_net_worth_summary
 from app.services.settings_service import get_or_create_app_settings
 
+from app.services.financial_data_service import capital_status, transaction_status, merge_statuses
+
 MAX_LOOKBACK_MONTHS = 24
 
 # Accounts where a big, untouched balance means money isn't working — a
@@ -130,6 +132,12 @@ async def _idle_cash_account_count(session: AsyncSession, threshold_amount: Deci
 
 async def get_financial_alerts(session: AsyncSession) -> AlertsResponse:
     settings = await get_or_create_app_settings(session)
+    status = merge_statuses(
+        await capital_status(session, settings.currency),
+        await transaction_status(session, settings.currency),
+    )
+    if not status.complete:
+        return AlertsResponse(currency=settings.currency, **status.model_dump(), alerts=[])
     alerts: list[FinancialAlert] = []
 
     cash_flow_streak = await _negative_cash_flow_streak(session)
@@ -188,4 +196,4 @@ async def get_financial_alerts(session: AsyncSession) -> AlertsResponse:
             )
         )
 
-    return AlertsResponse(alerts=alerts)
+    return AlertsResponse(currency=settings.currency, alerts=alerts)

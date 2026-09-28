@@ -3,6 +3,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.money import FinancialResponseStatus
+
 
 class CategoryRankingChildItem(BaseModel):
     """One subcategory's (or the parent's own direct, un-subcategorized)
@@ -22,16 +24,16 @@ class CategorySpendingPoint(BaseModel):
     amount: Decimal
 
 
-class CategorySpendingReport(BaseModel):
+class CategorySpendingReport(FinancialResponseStatus):
     category_id: int
     category_name: str
     category_color: str
     category_icon: str | None
     start_date: date_ | None
     end_date: date_ | None
-    total_amount: Decimal
+    total_amount: Decimal | None
     transaction_count: int
-    average_per_month: Decimal
+    average_per_month: Decimal | None
     series: list[CategorySpendingPoint]
 
 
@@ -49,8 +51,8 @@ class CategoryRankingItem(BaseModel):
     children: list[CategoryRankingChildItem] = Field(default_factory=list)
 
 
-class CategoryRankingReport(BaseModel):
+class CategoryRankingReport(FinancialResponseStatus):
     start_date: date_ | None
     end_date: date_ | None
-    total_amount: Decimal
+    total_amount: Decimal | None
     items: list[CategoryRankingItem]

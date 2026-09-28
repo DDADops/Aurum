@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.enums import TransactionType
 from app.models.transaction import Transaction
 from app.schemas.cash_flow import CashFlowPoint, CashFlowResponse
+from app.services.settings_service import get_or_create_app_settings
+from app.services.financial_data_service import transaction_status
 
 
 def _next_month(year: int, month: int) -> tuple[int, int]:
@@ -22,6 +24,7 @@ def _next_month(year: int, month: int) -> tuple[int, int]:
 async def get_cash_flow(
     session: AsyncSession, start_date: date_ | None, end_date: date_ | None
 ) -> CashFlowResponse:
+    currency = (await get_or_create_app_settings(session)).currency
     bounds_stmt = select(func.min(Transaction.date), func.max(Transaction.date)).where(
         Transaction.type != TransactionType.TRANSFER
     )
@@ -35,6 +38,7 @@ async def get_cash_flow(
     effective_end = end_date or max_date
 
     empty = CashFlowResponse(
+        currency=currency,
         start_date=effective_start,
         end_date=effective_end,
         points=[],
@@ -44,6 +48,13 @@ async def get_cash_flow(
     )
     if effective_start is None or effective_end is None:
         return empty
+
+    status = await transaction_status(session, currency, start_date=effective_start, end_date=effective_end)
+    if not status.complete:
+        return CashFlowResponse(
+            currency=currency, **status.model_dump(), start_date=effective_start, end_date=effective_end,
+            points=[], total_income=None, total_expense=None, total_net=None,
+        )
 
     rows_stmt = (
         select(
@@ -78,6 +89,7 @@ async def get_cash_flow(
     total_expense = sum((p.expense for p in points), Decimal("0"))
 
     return CashFlowResponse(
+        currency=currency,
         start_date=effective_start,
         end_date=effective_end,
         points=points,

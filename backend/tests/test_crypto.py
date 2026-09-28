@@ -67,14 +67,18 @@ async def test_create_holding_seeds_todays_value_and_position_immediately(client
     assert round(holding["profit_loss_percent"], 2) == 25.0
 
 
-async def test_holding_shows_up_in_net_worth_breakdown(client: AsyncClient, monkeypatch):
+async def test_net_worth_does_not_claim_unknown_crypto_valuation_currency(client: AsyncClient, monkeypatch):
     monkeypatch.setattr(crypto_service, "_fetch_market_data", _fake_fetch({"bitcoin": _point("50000")}))
     await _add_bitcoin(client, "1", "40000")
 
     resp = await client.get("/net-worth/summary")
 
-    breakdown = {item["key"]: item for item in resp.json()["breakdown"]}
-    assert money(breakdown["crypto"]["amount"]) == money("50000")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["complete"] is False
+    assert body["current"] is None
+    assert body["breakdown"] == []
+    assert {"code": "valuation_currency_unconfirmed"} in body["data_issues"]
 
 
 async def test_second_buy_blends_into_weighted_average_cost(client: AsyncClient, monkeypatch):

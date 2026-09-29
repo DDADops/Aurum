@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.currency import CurrencyCode, CurrencyUpdate
 from app.core.money import Money, Valuation
 from app.models.enums import AssetClass, CapitalRole, RiskLevel
 
@@ -23,7 +24,7 @@ class AssetValuationRead(BaseModel):
 class AssetBase(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     asset_class: AssetClass
-    currency: str = Field(default="USD", min_length=3, max_length=3)
+    currency: CurrencyCode = "USD"
     notes: str | None = Field(default=None, max_length=2000)
     capital_role: CapitalRole = CapitalRole.NEUTRAL
     # Rough self-reported monthly net cash flow — informational, not tracked
@@ -40,7 +41,7 @@ class AssetCreate(AssetBase):
 class AssetUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=150)
     asset_class: AssetClass | None = None
-    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    currency: CurrencyUpdate = None
     notes: str | None = Field(default=None, max_length=2000)
     capital_role: CapitalRole | None = None
     monthly_cash_flow: Money | None = None
@@ -51,5 +52,6 @@ class AssetRead(AssetBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    has_monetary_history: bool
     current_value: Decimal
     as_of_date: date_

@@ -16,6 +16,7 @@ class Goal(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(150), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
     target_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6, asdecimal=True), nullable=False)
     target_date: Mapped[date_ | None] = mapped_column(Date, nullable=True)
 

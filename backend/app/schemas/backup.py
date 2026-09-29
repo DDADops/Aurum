@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.currency import CurrencyCode
 from app.core.money import Money, Valuation
 from app.models.enums import (
     AccountType,
@@ -24,7 +25,7 @@ class AccountBackup(BaseModel):
     id: int
     name: str
     type: AccountType
-    currency: str
+    currency: CurrencyCode
     color: str | None
     is_archived: bool
 
@@ -52,6 +53,9 @@ class TagBackup(BaseModel):
 
 
 class TransactionBackup(BaseModel):
+    # Optional additions to v1; omission is legacy, explicit values are authoritative.
+    transfer_amount: Money | None = None
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -87,7 +91,7 @@ class AssetBackup(BaseModel):
     id: int
     name: str
     asset_class: AssetClass
-    currency: str
+    currency: CurrencyCode
     notes: str | None
     # Defaulted so a backup exported before capital_role/monthly_cash_flow
     # existed still imports cleanly under the same format version.
@@ -156,6 +160,9 @@ class CryptoTransactionBackup(BaseModel):
 
 
 class BudgetBackup(BaseModel):
+    # Optional additions to v1; omission is legacy, explicit values are authoritative.
+    currency: CurrencyCode | None = None
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -164,6 +171,9 @@ class BudgetBackup(BaseModel):
 
 
 class GoalBackup(BaseModel):
+    # Optional additions to v1; omission is legacy, explicit values are authoritative.
+    currency: CurrencyCode | None = None
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -183,6 +193,11 @@ class GoalContributionBackup(BaseModel):
 
 
 class RecurringTransactionBackup(BaseModel):
+    # Optional additions to v1; omission is legacy, explicit values are authoritative.
+    amount_currency: CurrencyCode | None = None
+    transfer_amount: Money | None = None
+    transfer_amount_currency: CurrencyCode | None = None
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -203,7 +218,7 @@ class RecurringTransactionBackup(BaseModel):
 class AppSettingsBackup(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    currency: str
+    currency: CurrencyCode
     # Defaulted so a backup exported before these thresholds existed still
     # imports cleanly under the same format version.
     negative_cash_flow_threshold_months: int = 2

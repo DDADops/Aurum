@@ -17,6 +17,7 @@ from app.models.category import Category
 from app.models.enums import CategoryKind, TransactionType
 from app.models.transaction import Transaction, TransactionSplit
 from app.schemas.budget import BudgetCreate, BudgetStatus, BudgetStatusResponse, BudgetUpdate
+from app.services.settings_service import effective_default_currency
 
 _EAGER = (selectinload(Budget.category),)
 
@@ -42,7 +43,8 @@ async def create_budget(session: AsyncSession, payload: BudgetCreate) -> Budget:
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(status_code=400, detail=f"'{category.name}' already has a budget")
 
-    budget = Budget(category_id=payload.category_id, monthly_limit=payload.monthly_limit)
+    budget = Budget(category_id=payload.category_id, monthly_limit=payload.monthly_limit,
+                    currency=payload.currency or await effective_default_currency(session))
     session.add(budget)
     await session.commit()
     refreshed = await session.execute(select(Budget).options(*_EAGER).where(Budget.id == budget.id))
@@ -53,6 +55,8 @@ async def update_budget(session: AsyncSession, budget_id: int, payload: BudgetUp
     budget = await session.get(Budget, budget_id)
     if budget is None:
         raise HTTPException(status_code=404, detail="Budget not found")
+    if payload.currency is not None:
+        budget.currency = payload.currency
     budget.monthly_limit = payload.monthly_limit
     await session.commit()
     refreshed = await session.execute(select(Budget).options(*_EAGER).where(Budget.id == budget_id))

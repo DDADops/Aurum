@@ -29,6 +29,10 @@ class RecurringTransaction(Base, TimestampMixin):
     type: Mapped[TransactionType] = mapped_column(
         Enum(TransactionType, name="recurring_transaction_type", native_enum=False, length=10), nullable=False
     )
+    # Authored instruction currencies; account edits must not rewrite these.
+    amount_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    transfer_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6, asdecimal=True), nullable=True)
+    transfer_amount_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(20, 6, asdecimal=True), nullable=False)
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     merchant: Mapped[str | None] = mapped_column(String(150), nullable=True)

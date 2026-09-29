@@ -3,6 +3,8 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.currency import CurrencyCode
+
 # Single source of truth for the running app's version — surfaced in the API
 # title, in GET /api/settings as app_version (which the frontend reads to show
 # it in Settings; it deliberately does NOT ride on the unauthenticated
@@ -22,7 +24,7 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
 
     # Default currency shown across the UI when an account doesn't override it
-    default_currency: str = "USD"
+    default_currency: CurrencyCode = "USD"
 
     # Comma-separated list of browser origins allowed to call the API. Empty
     # by default, which allows none: the shipped compose serves the UI and the

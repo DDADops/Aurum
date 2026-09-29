@@ -25,8 +25,10 @@ class Transaction(Base, TimestampMixin):
     type: Mapped[TransactionType] = mapped_column(
         Enum(TransactionType, name="transaction_type", native_enum=False, length=10), nullable=False
     )
-    # Always stored positive; `type` carries the sign/direction.
+    # Always stored positive in source currency; `type` carries the direction.
     amount: Mapped[Decimal] = mapped_column(Numeric(20, 6, asdecimal=True), nullable=False)
+    # Destination-native amount; NULL also represents unresolved legacy transfers.
+    transfer_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6, asdecimal=True), nullable=True)
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     merchant: Mapped[str | None] = mapped_column(String(150), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

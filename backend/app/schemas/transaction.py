@@ -179,6 +179,7 @@ class TransactionSplitRead(BaseModel):
 
 
 class TransactionRead(TransactionFields):
+    transfer_amount: Decimal | None = None
     model_config = ConfigDict(from_attributes=True)
 
     id: int

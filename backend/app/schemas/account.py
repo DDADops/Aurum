@@ -2,13 +2,14 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.currency import CurrencyCode, CurrencyUpdate
 from app.models.enums import AccountType
 
 
 class AccountBase(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     type: AccountType = AccountType.CHECKING
-    currency: str = Field(default="USD", min_length=3, max_length=3)
+    currency: CurrencyCode = "USD"
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
 
 
@@ -19,7 +20,7 @@ class AccountCreate(AccountBase):
 class AccountUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     type: AccountType | None = None
-    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    currency: CurrencyUpdate = None
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     is_archived: bool | None = None
 
@@ -41,4 +42,5 @@ class AccountWithBalance(AccountRead):
     stored, the same "derive it" approach net_worth_service.py uses for
     Cash. Used only by /api/accounts' own endpoints, never nested."""
 
+    has_monetary_history: bool
     balance: Decimal

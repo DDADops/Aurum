@@ -17,12 +17,14 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.config import APP_VERSION
+from app.core.config import APP_VERSION, get_settings
+from app.core.currency import normalize_currency
 from app.models.account import Account
 from app.models.asset import Asset, AssetValuation
 from app.models.budget import Budget
 from app.models.category import Category
 from app.models.crypto import CryptoHolding, CryptoPortfolio, CryptoTransaction
+from app.models.enums import TransactionType
 from app.models.goal import Goal, GoalContribution
 from app.models.recurring import RecurringTransaction
 from app.models.settings import AppSettings
@@ -92,7 +94,7 @@ async def build_backup(session: AsyncSession) -> BackupPayload:
         goals=[GoalBackup.model_validate(row) for row in goals],
         goal_contributions=[GoalContributionBackup.model_validate(row) for row in goal_contributions],
         recurring_transactions=[RecurringTransactionBackup.model_validate(row) for row in recurring_transactions],
-        app_settings=AppSettingsBackup.model_validate(app_settings) if app_settings else AppSettingsBackup(currency="USD"),
+        app_settings=AppSettingsBackup.model_validate(app_settings) if app_settings else AppSettingsBackup(currency=get_settings().default_currency),
     )
 
 
@@ -181,6 +183,39 @@ async def _reset_sequence(session: AsyncSession, table: str, rows: list) -> None
     )
 
 
+def _native_values(payload: BackupPayload) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    """v1 extension: preserve explicit fields; infer only omitted legacy data.
+
+    In particular an explicitly null destination amount remains unresolved.
+    Defaults come from the backup itself, never the database being replaced.
+    """
+    accounts = {row.id: row for row in payload.accounts}
+    currency = normalize_currency(payload.app_settings.currency)
+    transactions = []
+    for row in payload.transactions:
+        values = row.model_dump(exclude={"tag_ids"})
+        if "transfer_amount" not in row.model_fields_set and row.type == TransactionType.TRANSFER:
+            destination = accounts.get(row.transfer_account_id)
+            if destination is not None and accounts[row.account_id].currency == destination.currency:
+                values["transfer_amount"] = row.amount
+        transactions.append(values)
+    budgets = [{**row.model_dump(), "currency": row.currency or currency} for row in payload.budgets]
+    goals = [{**row.model_dump(), "currency": row.currency or currency} for row in payload.goals]
+    recurring = []
+    for row in payload.recurring_transactions:
+        values = row.model_dump()
+        values["amount_currency"] = row.amount_currency or accounts[row.account_id].currency
+        if row.type == TransactionType.TRANSFER:
+            destination = accounts.get(row.transfer_account_id)
+            if destination is not None:
+                if "transfer_amount_currency" not in row.model_fields_set:
+                    values["transfer_amount_currency"] = destination.currency
+                if "transfer_amount" not in row.model_fields_set and values["amount_currency"] == destination.currency:
+                    values["transfer_amount"] = row.amount
+        recurring.append(values)
+    return transactions, budgets, goals, recurring
+
+
 async def restore_backup(session: AsyncSession, payload: BackupPayload) -> None:
     if payload.aurum_backup_version != BACKUP_FORMAT_VERSION:
         raise HTTPException(
@@ -190,6 +225,7 @@ async def restore_backup(session: AsyncSession, payload: BackupPayload) -> None:
         )
 
     _validate_references(payload)
+    native_transactions, native_budgets, native_goals, native_recurring = _native_values(payload)
 
     try:
         # Children before parents.
@@ -232,7 +268,7 @@ async def restore_backup(session: AsyncSession, payload: BackupPayload) -> None:
         # otherwise trigger an implicit lazy-load, which async SQLAlchemy
         # can't do outside an explicit await (MissingGreenlet).
         transactions_by_id = {
-            row.id: Transaction(**row.model_dump(exclude={"tag_ids"}), tags=[]) for row in payload.transactions
+            values["id"]: Transaction(**values, tags=[]) for values in native_transactions
         }
         session.add_all(transactions_by_id.values())
         session.add_all(TransactionSplit(**row.model_dump()) for row in payload.transaction_splits)
@@ -263,10 +299,10 @@ async def restore_backup(session: AsyncSession, payload: BackupPayload) -> None:
         session.add_all(crypto_holdings)
 
         session.add_all(CryptoTransaction(**row.model_dump()) for row in payload.crypto_transactions)
-        session.add_all(Budget(**row.model_dump()) for row in payload.budgets)
-        session.add_all(Goal(**row.model_dump()) for row in payload.goals)
+        session.add_all(Budget(**values) for values in native_budgets)
+        session.add_all(Goal(**values) for values in native_goals)
         session.add_all(GoalContribution(**row.model_dump()) for row in payload.goal_contributions)
-        session.add_all(RecurringTransaction(**row.model_dump()) for row in payload.recurring_transactions)
+        session.add_all(RecurringTransaction(**values) for values in native_recurring)
         await session.flush()
 
         for row in payload.transactions:

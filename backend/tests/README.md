@@ -41,3 +41,52 @@ Two details that both come from the container running as an unprivileged user
 - Every table is truncated and reseeded before each test (see
   `conftest.py::_clean_database`), so tests don't need to worry about
   leftover state or guess at IDs from a previous test.
+
+## Native currency persistence (commit 4)
+
+`test_native_currency.py` runs against the temporary database above. It covers
+legacy backfill, reversible downgrade and transactional preflight refusals,
+dynamic history guards, currency normalization, snapshots and v1 backup fields.
+The previous precision migration test inserts only legacy columns while the
+previous schema is installed, and restores the current head before returning.
+
+Account PATCH locks the Account row and then queries transaction history on
+both source and destination references. The concurrency test uses a cooperative
+writer holding that same lock. **Transaction create/PATCH/bulk and recurring
+posting do not yet implement the complementary Account lock protocol**: commit 5
+must lock all affected accounts in stable ID order before currency-dependent
+validation and writes. Do not treat this intermediate commit as full race
+protection. Asset PATCH similarly locks Asset before checking valuations and
+crypto transactions; the valuation/crypto writer protocol and quote metadata
+still need completion in the corresponding later work.
+
+Recurring snapshots remain unchanged by Account PATCH. Until the recurring
+posting implementation is replaced, posting refuses stale source snapshots,
+missing/unresolved destinations and transfers the old writer cannot faithfully
+represent (`409 recurring_currency_revalidation_required`). No automatic FX,
+revalidation, transaction destination write behavior or balance rewrite is
+implemented here. Budget/Goal reads expose native currencies; currency-aware
+budget aggregation remains later work. Budget currency edits require an
+explicit replacement limit; Goal currency edits require a replacement target
+and no contributions. Goal contribution writes share the Goal row lock.
+
+Asset currency changes require explicit replacement/clearing of existing
+monthly cash flow (including zero). On an empty holding they clear `last_price`
+and all five cached price-change fields. No quote currency metadata or sync
+service changes are introduced; future price refresh validation belongs to the
+crypto work. There is no valuation deletion API and no permanent currency lock.
+
+Backup remains v1, with optional transfer/native currency fields. New exports
+include authoritative values; restore preserves them, including explicit null
+unresolved amounts. Only omitted legacy fields are inferred from the backup's
+accounts/settings using the migration rules. Files containing the extended v1
+fields must be restored with this or a newer Aurum build; older readers can
+ignore unknown fields. A versioned portability contract remains backup-v2 work.
+
+The native-currency migration uses settings row `id=1`, falling back to configured
+`AURUM_DEFAULT_CURRENCY` only when absent. Downgrade locks all relevant tables and
+refuses authoritative destination amounts incompatible with the old schema
+(including cross-currency 1:1 amounts), native Budget/Goal currencies differing
+from legacy settings, or recurring snapshots differing from their accounts.
+Run schema migrations with application writers stopped, and recreate pooled
+asyncpg connections after DDL to avoid stale prepared-statement metadata.

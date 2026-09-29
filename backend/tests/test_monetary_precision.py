@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
-from sqlalchemy import text
+from sqlalchemy import insert, text
 
 from app.core.money import Money, Valuation, sum_money
 from app.models.asset import Asset, AssetValuation
@@ -146,18 +146,23 @@ async def test_precision_migration_roundtrip_and_loss_preflight(test_sessionmake
     try:
         async with test_sessionmaker() as session:
             category_id = next(c["id"] for c in categories.values() if c["kind"] == "expense")
-            transaction = Transaction(account_id=account_id, type=TransactionType.EXPENSE, amount=Decimal("123.45"), description="Old data", date=date.today())
             asset = Asset(name="Old asset", asset_class=AssetClass.OTHER, monthly_cash_flow=Decimal("-12.34"))
-            goal = Goal(name="Old goal", target_amount=Decimal("999999999999.99"))
             portfolio = CryptoPortfolio(name="Precision")
-            session.add_all([transaction, asset, goal, portfolio, Asset(name="Null flow", asset_class=AssetClass.OTHER)])
+            transaction_id = await session.scalar(insert(Transaction.__table__).values(
+                account_id=account_id, type=TransactionType.EXPENSE, amount=Decimal("123.45"),
+                description="Old data", date=date.today()).returning(Transaction.id))
+            goal_id = await session.scalar(insert(Goal.__table__).values(
+                name="Old goal", target_amount=Decimal("999999999999.99")).returning(Goal.id))
+            await session.execute(insert(Budget.__table__).values(category_id=category_id, monthly_limit=Decimal("100")))
+            await session.execute(insert(RecurringTransaction.__table__).values(
+                account_id=account_id, type=TransactionType.EXPENSE, amount=Decimal("123.45"),
+                description="Old template", frequency=RecurringFrequency.MONTHLY, anchor_date=date.today()))
+            session.add_all([asset, portfolio, Asset(name="Null flow", asset_class=AssetClass.OTHER)])
             await session.flush()
             session.add_all([
-                TransactionSplit(transaction_id=transaction.id, category_id=category_id, amount=Decimal("123.45")),
+                TransactionSplit(transaction_id=transaction_id, category_id=category_id, amount=Decimal("123.45")),
                 AssetValuation(asset_id=asset.id, value=Decimal("999999999999.99"), as_of_date=date.today()),
-                GoalContribution(goal_id=goal.id, amount=Decimal("-12.34"), date=date.today()),
-                Budget(category_id=category_id, monthly_limit=Decimal("100.00")),
-                RecurringTransaction(account_id=account_id, type=TransactionType.EXPENSE, amount=Decimal("123.45"), description="Old template", frequency=RecurringFrequency.MONTHLY, anchor_date=date.today()),
+                GoalContribution(goal_id=goal_id, amount=Decimal("-12.34"), date=date.today()),
                 CryptoHolding(asset_id=asset.id, portfolio_id=portfolio.id, coingecko_id="bitcoin", symbol="BTC", name="Bitcoin", last_price=Decimal("1.123456789123456789")),
             ])
             await session.flush()
@@ -189,4 +194,4 @@ async def test_precision_migration_roundtrip_and_loss_preflight(test_sessionmake
                     await session.execute(text(f'UPDATE "{table}" SET "{column}"=:value WHERE id=(SELECT min(id) FROM "{table}")'), {"value": old_values[table][0]})
                     await session.commit()
     finally:
-        migrate("upgrade", HEAD)
+        migrate("upgrade", "head")

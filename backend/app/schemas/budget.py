@@ -2,19 +2,23 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from app.core.currency import CurrencyCode, CurrencyUpdate
 from app.core.money import Money
 
 
 class BudgetCreate(BaseModel):
+    currency: CurrencyCode | None = None
     category_id: int
     monthly_limit: Money = Field(gt=0)
 
 
 class BudgetUpdate(BaseModel):
+    currency: CurrencyUpdate = None
     monthly_limit: Money = Field(gt=0)
 
 
 class BudgetRead(BaseModel):
+    currency: CurrencyCode
     id: int
     category_id: int
     category_name: str

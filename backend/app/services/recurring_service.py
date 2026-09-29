@@ -13,6 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.currency import normalize_currency
+from app.models.account import Account
 from app.models.category import Category
 from app.models.enums import CategoryKind, RecurringFrequency, TransactionType
 from app.models.recurring import RecurringTransaction
@@ -83,6 +85,9 @@ def _to_read(recurring: RecurringTransaction) -> RecurringTransactionRead:
         transfer_account_name=recurring.transfer_account.name if recurring.transfer_account else None,
         type=recurring.type,
         amount=recurring.amount,
+        amount_currency=recurring.amount_currency,
+        transfer_amount=recurring.transfer_amount,
+        transfer_amount_currency=recurring.transfer_amount_currency,
         description=recurring.description,
         merchant=recurring.merchant,
         notes=recurring.notes,
@@ -115,7 +120,23 @@ async def list_recurring(session: AsyncSession) -> list[RecurringTransactionRead
 
 async def create_recurring(session: AsyncSession, payload: RecurringTransactionCreate) -> RecurringTransactionRead:
     await _ensure_category_matches_type(session, payload.category_id, payload.type)
-    recurring = RecurringTransaction(**payload.model_dump())
+    source = await session.get(Account, payload.account_id)
+    if source is None:
+        raise HTTPException(400, "Account not found")
+    values = payload.model_dump()
+    values["amount_currency"] = payload.amount_currency or normalize_currency(source.currency)
+    if payload.type != TransactionType.TRANSFER:
+        if payload.transfer_amount is not None or payload.transfer_amount_currency is not None:
+            raise HTTPException(422, "Destination amounts are only valid for transfers")
+    else:
+        destination = await session.get(Account, payload.transfer_account_id) if payload.transfer_account_id else None
+        if destination is not None:
+            values["transfer_amount_currency"] = payload.transfer_amount_currency or normalize_currency(destination.currency)
+            if payload.transfer_amount is None and values["amount_currency"] == values["transfer_amount_currency"]:
+                values["transfer_amount"] = payload.amount
+        if values["transfer_amount"] is not None and values["transfer_amount_currency"] is None:
+            raise HTTPException(422, "Destination amount requires its instruction currency")
+    recurring = RecurringTransaction(**values)
     session.add(recurring)
     await session.commit()
     return _to_read(await _get_or_404(session, recurring.id))
@@ -129,6 +150,15 @@ async def update_recurring(
     effective_type = updates.get("type", recurring.type)
     effective_category_id = updates.get("category_id", recurring.category_id)
     await _ensure_category_matches_type(session, effective_category_id, effective_type)
+    destination_amount = updates.get("transfer_amount", recurring.transfer_amount)
+    destination_currency = updates.get("transfer_amount_currency", recurring.transfer_amount_currency)
+    if effective_type != TransactionType.TRANSFER:
+        if updates.get("transfer_amount") is not None or updates.get("transfer_amount_currency") is not None:
+            raise HTTPException(422, "Destination amounts are only valid for transfers")
+        updates.update(transfer_amount=None, transfer_amount_currency=None)
+    elif destination_amount is not None and destination_currency is None:
+        raise HTTPException(422, "Destination amount requires its instruction currency")
+    # Existing snapshots remain authored instructions, even after account edits.
     for field, value in updates.items():
         setattr(recurring, field, value)
     await session.commit()
@@ -147,6 +177,17 @@ async def post_recurring(session: AsyncSession, recurring_id: int) -> RecurringT
     """Creates a real Transaction from the template, dated today, and moves
     last_posted_date forward — the only thing that advances the schedule."""
     recurring = await _get_or_404(session, recurring_id)
+    # Transitional refusal only. Full posting/revalidation and writer locks
+    # belong to the transaction/recurring commits, not this persistence step.
+    if recurring.amount_currency != normalize_currency(recurring.account.currency):
+        raise HTTPException(409, "recurring_currency_revalidation_required")
+    if recurring.type == TransactionType.TRANSFER and (
+        recurring.transfer_account is None
+        or recurring.transfer_amount_currency != normalize_currency(recurring.transfer_account.currency)
+        or recurring.amount_currency != recurring.transfer_amount_currency
+        or recurring.transfer_amount != recurring.amount
+    ):
+        raise HTTPException(409, "recurring_currency_revalidation_required")
     today = date_.today()
 
     session.add(

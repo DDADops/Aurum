@@ -3,12 +3,16 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.currency import CurrencyCode, CurrencyUpdate
 from app.core.money import Money
 from app.core.text import capitalize_first_letter
 from app.models.enums import RecurringFrequency, TransactionType
 
 
 class RecurringTransactionCreate(BaseModel):
+    amount_currency: CurrencyCode | None = None
+    transfer_amount: Money | None = Field(default=None, gt=0)
+    transfer_amount_currency: CurrencyCode | None = None
     account_id: int
     category_id: int | None = None
     transfer_account_id: int | None = None
@@ -29,6 +33,9 @@ class RecurringTransactionCreate(BaseModel):
 
 
 class RecurringTransactionUpdate(BaseModel):
+    amount_currency: CurrencyUpdate = None
+    transfer_amount: Money | None = Field(default=None, gt=0)
+    transfer_amount_currency: CurrencyCode | None = None
     account_id: int | None = None
     category_id: int | None = None
     transfer_account_id: int | None = None
@@ -48,6 +55,9 @@ class RecurringTransactionUpdate(BaseModel):
 
 
 class RecurringTransactionRead(BaseModel):
+    amount_currency: CurrencyCode
+    transfer_amount: Decimal | None
+    transfer_amount_currency: CurrencyCode | None
     id: int
     account_id: int
     account_name: str

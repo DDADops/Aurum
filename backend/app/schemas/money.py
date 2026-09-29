@@ -1,10 +1,10 @@
 """API completeness vocabulary; no conversion or monetary precision policy."""
 from datetime import date
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
-CurrencyCode = Annotated[str, Field(min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")]
+from app.core.currency import CurrencyCode
 
 
 class MissingRate(BaseModel):

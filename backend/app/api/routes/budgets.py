@@ -19,6 +19,7 @@ def _to_read(budget: Budget) -> BudgetRead:
         category_color=budget.category.color,
         category_icon=budget.category.icon,
         monthly_limit=budget.monthly_limit,
+        currency=budget.currency,
     )
 
 

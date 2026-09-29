@@ -11,10 +11,12 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.currency import normalize_currency
 from app.models.account import Account
 from app.models.enums import TransactionType
 from app.models.transaction import Transaction
 from app.schemas.account import AccountCreate, AccountUpdate, AccountWithBalance
+from app.services.currency_history import account_has_history
 
 
 async def _account_balances(session: AsyncSession) -> dict[int, Decimal]:
@@ -34,7 +36,7 @@ async def _account_balances(session: AsyncSession) -> dict[int, Decimal]:
     return balances
 
 
-def _to_read(account: Account, balance: Decimal) -> AccountWithBalance:
+def _to_read(account: Account, balance: Decimal, has_history: bool) -> AccountWithBalance:
     return AccountWithBalance(
         id=account.id,
         name=account.name,
@@ -43,6 +45,7 @@ def _to_read(account: Account, balance: Decimal) -> AccountWithBalance:
         color=account.color,
         is_archived=account.is_archived,
         balance=balance,
+        has_monetary_history=has_history,
     )
 
 
@@ -52,7 +55,7 @@ async def list_accounts(session: AsyncSession, include_archived: bool) -> list[A
         stmt = stmt.where(Account.is_archived.is_(False))
     accounts = (await session.execute(stmt)).scalars().all()
     balances = await _account_balances(session)
-    return [_to_read(account, balances.get(account.id, Decimal("0"))) for account in accounts]
+    return [_to_read(account, balances.get(account.id, Decimal("0")), await account_has_history(session, account.id)) for account in accounts]
 
 
 async def create_account(session: AsyncSession, payload: AccountCreate) -> AccountWithBalance:
@@ -61,19 +64,25 @@ async def create_account(session: AsyncSession, payload: AccountCreate) -> Accou
     await session.commit()
     await session.refresh(account)
     # A brand-new account has no transactions yet — no need to query.
-    return _to_read(account, Decimal("0"))
+    return _to_read(account, Decimal("0"), False)
 
 
 async def update_account(session: AsyncSession, account_id: int, payload: AccountUpdate) -> AccountWithBalance:
-    account = await session.get(Account, account_id)
+    # Lock before reading the currency/history; refresh any identity-map copy.
+    account = (await session.execute(
+        select(Account).where(Account.id == account_id).with_for_update().execution_options(populate_existing=True)
+    )).scalar_one_or_none()
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
+    has_history = await account_has_history(session, account_id)
+    if payload.currency is not None and payload.currency != normalize_currency(account.currency) and has_history:
+        raise HTTPException(status_code=409, detail="currency_change_requires_empty_history")
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(account, field, value)
     await session.commit()
     await session.refresh(account)
     balances = await _account_balances(session)
-    return _to_read(account, balances.get(account.id, Decimal("0")))
+    return _to_read(account, balances.get(account.id, Decimal("0")), has_history)
 
 
 async def delete_account(session: AsyncSession, account_id: int) -> None:

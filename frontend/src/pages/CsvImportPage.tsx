@@ -174,8 +174,8 @@ export function CsvImportPage() {
     return map;
   }, [categories]);
 
-  function resolveType(amount: number): "income" | "expense" {
-    return amount < 0 ? "expense" : "income";
+  function resolveType(amount: string): "income" | "expense" {
+    return amount.startsWith("-") ? "expense" : "income";
   }
 
   /** First non-empty raw value under `headerName`, shown next to a mapping
@@ -262,7 +262,7 @@ export function CsvImportPage() {
         return;
       }
       const amount = parseAmount(rawAmount, amountFormat);
-      if (amount === null || amount === 0) {
+      if (amount === null || amount === "0") {
         skippedRows.push({ row: rowNumber, reason: t("transactions.import.errorBadAmount", { value: rawAmount || "—" }) });
         return;
       }
@@ -280,7 +280,7 @@ export function CsvImportPage() {
         category_id: categoryId,
         transfer_account_id: null,
         type,
-        amount: Math.abs(amount).toFixed(2),
+        amount: amount.replace(/^-/, ""),
         description,
         merchant: rawMerchant || null,
         notes: rawNotes || null,

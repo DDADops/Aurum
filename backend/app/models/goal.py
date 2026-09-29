@@ -2,6 +2,7 @@
 same "you record it, we sum it" shape as Asset/AssetValuation, except
 contributions are deltas added together, not point-in-time snapshots."""
 from datetime import date as date_
+from decimal import Decimal
 
 from sqlalchemy import Date, ForeignKey, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -15,7 +16,7 @@ class Goal(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(150), nullable=False)
-    target_amount: Mapped[Numeric] = mapped_column(Numeric(14, 2), nullable=False)
+    target_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6, asdecimal=True), nullable=False)
     target_date: Mapped[date_ | None] = mapped_column(Date, nullable=True)
 
     contributions: Mapped[list["GoalContribution"]] = relationship(
@@ -31,7 +32,7 @@ class GoalContribution(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     goal_id: Mapped[int] = mapped_column(ForeignKey("goals.id", ondelete="CASCADE"), nullable=False)
-    amount: Mapped[Numeric] = mapped_column(Numeric(14, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(20, 6, asdecimal=True), nullable=False)
     date: Mapped[date_] = mapped_column(Date, nullable=False)
     note: Mapped[str | None] = mapped_column(String(200), nullable=True)
 

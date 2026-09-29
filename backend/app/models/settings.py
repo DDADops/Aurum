@@ -27,5 +27,5 @@ class AppSettings(Base):
     # balance with no transaction touching it in idle_cash_threshold_days
     # raises insights_service.py's idle_cash alert — money that isn't
     # working. In the app's display currency (see `currency` above).
-    idle_cash_threshold_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("1000"))
+    idle_cash_threshold_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6, asdecimal=True), nullable=False, default=Decimal("1000"))
     idle_cash_threshold_days: Mapped[int] = mapped_column(Integer, nullable=False, default=60)

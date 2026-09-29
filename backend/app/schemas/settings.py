@@ -3,6 +3,7 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.config import APP_VERSION
+from app.core.money import Money
 
 
 class AppSettingsRead(BaseModel):
@@ -40,5 +41,5 @@ class AppSettingsUpdate(BaseModel):
     risky_allocation_threshold_percent: int | None = Field(default=None, ge=1, le=100)
     # Balance (in the app's display currency) and days of no activity a
     # depository account needs to hit before idle_cash fires.
-    idle_cash_threshold_amount: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    idle_cash_threshold_amount: Money | None = Field(default=None, ge=0)
     idle_cash_threshold_days: int | None = Field(default=None, ge=1, le=365)

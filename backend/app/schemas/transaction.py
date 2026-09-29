@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.money import Money, sum_money
 from app.core.text import capitalize_first_letter
 from app.models.enums import TransactionType
 from app.schemas.account import AccountRead
@@ -83,7 +84,7 @@ class TransactionFields(BaseModel):
     category_id: int | None = None
     transfer_account_id: int | None = None
     type: TransactionType
-    amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    amount: Money = Field(gt=0)
     description: str = Field(min_length=1, max_length=255)
     merchant: str | None = Field(default=None, max_length=150)
     notes: str | None = Field(default=None, max_length=2000)
@@ -116,7 +117,7 @@ class TransactionBase(TransactionFields):
 
 class TransactionSplitInput(BaseModel):
     category_id: int
-    amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    amount: Money = Field(gt=0)
     note: str | None = Field(default=None, max_length=200)
 
 
@@ -137,7 +138,7 @@ class TransactionCreate(TransactionBase):
             amount=self.amount,
             category_id=self.category_id,
             split_count=len(splits),
-            split_total=sum((s.amount for s in splits), Decimal("0")) if splits else None,
+            split_total=sum_money(s.amount for s in splits) if splits else None,
         )
         if violation:
             raise ValueError(violation)
@@ -149,7 +150,7 @@ class TransactionUpdate(BaseModel):
     category_id: int | None = None
     transfer_account_id: int | None = None
     type: TransactionType | None = None
-    amount: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
+    amount: Money | None = Field(default=None, gt=0)
     description: str | None = Field(default=None, min_length=1, max_length=255)
     merchant: str | None = Field(default=None, max_length=150)
     notes: str | None = Field(default=None, max_length=2000)

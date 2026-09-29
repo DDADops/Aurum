@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.money import Money, Valuation
 from app.models.enums import (
     AccountType,
     AssetClass,
@@ -58,7 +59,7 @@ class TransactionBackup(BaseModel):
     category_id: int | None
     transfer_account_id: int | None
     type: TransactionType
-    amount: Decimal
+    amount: Money
     description: str
     merchant: str | None
     notes: str | None
@@ -76,7 +77,7 @@ class TransactionSplitBackup(BaseModel):
     id: int
     transaction_id: int
     category_id: int | None
-    amount: Decimal
+    amount: Money
     note: str | None
 
 
@@ -91,7 +92,7 @@ class AssetBackup(BaseModel):
     # Defaulted so a backup exported before capital_role/monthly_cash_flow
     # existed still imports cleanly under the same format version.
     capital_role: CapitalRole = CapitalRole.NEUTRAL
-    monthly_cash_flow: Decimal | None = None
+    monthly_cash_flow: Money | None = None
     # Defaulted so a backup exported before risk_level existed still
     # imports cleanly under the same format version.
     risk_level: RiskLevel = RiskLevel.MEDIUM
@@ -102,7 +103,7 @@ class AssetValuationBackup(BaseModel):
 
     id: int
     asset_id: int
-    value: Decimal
+    value: Valuation
     as_of_date: date_
 
 
@@ -132,7 +133,7 @@ class CryptoHoldingBackup(BaseModel):
     symbol: str
     name: str
     thumb_url: str | None
-    last_price: Decimal | None = None
+    last_price: Valuation | None = None
     price_change_1h: Decimal | None = None
     price_change_24h: Decimal | None = None
     price_change_7d: Decimal | None = None
@@ -148,8 +149,8 @@ class CryptoTransactionBackup(BaseModel):
     id: int
     asset_id: int
     type: CryptoTransactionType
-    quantity: Decimal
-    price_per_unit: Decimal
+    quantity: Valuation
+    price_per_unit: Valuation
     date: date_
     note: str | None
 
@@ -159,7 +160,7 @@ class BudgetBackup(BaseModel):
 
     id: int
     category_id: int
-    monthly_limit: Decimal
+    monthly_limit: Money
 
 
 class GoalBackup(BaseModel):
@@ -167,7 +168,7 @@ class GoalBackup(BaseModel):
 
     id: int
     name: str
-    target_amount: Decimal
+    target_amount: Money
     target_date: date_ | None
 
 
@@ -176,7 +177,7 @@ class GoalContributionBackup(BaseModel):
 
     id: int
     goal_id: int
-    amount: Decimal
+    amount: Money
     date: date_
     note: str | None
 
@@ -189,7 +190,7 @@ class RecurringTransactionBackup(BaseModel):
     category_id: int | None
     transfer_account_id: int | None
     type: TransactionType
-    amount: Decimal
+    amount: Money
     description: str
     merchant: str | None
     notes: str | None
@@ -212,7 +213,7 @@ class AppSettingsBackup(BaseModel):
     risky_allocation_threshold_percent: int = 20
     # Defaulted so a backup exported before idle-cash thresholds existed
     # still imports cleanly under the same format version.
-    idle_cash_threshold_amount: Decimal = Decimal("1000")
+    idle_cash_threshold_amount: Money = Decimal("1000")
     idle_cash_threshold_days: int = 60
 
 

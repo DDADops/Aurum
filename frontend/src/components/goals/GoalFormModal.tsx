@@ -76,8 +76,8 @@ export function GoalFormModal({ open, onClose, goal }: GoalFormModalProps) {
             <Input
               id="goal-target"
               type="number"
-              step="0.01"
-              min="0.01"
+              step="0.000001"
+              min="0.000001"
               required
               value={form.target_amount}
               onChange={(event) => setForm((prev) => ({ ...prev, target_amount: event.target.value }))}

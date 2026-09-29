@@ -1,3 +1,5 @@
+import { moneyToUnits, unitsToMoney } from "@/lib/money";
+
 // Minimal RFC4180-ish CSV parser — handles quoted fields (with embedded
 // delimiters/newlines, "" as an escaped quote) and auto-detects comma vs
 // semicolon as the delimiter (many EU bank exports use ";"). No dependency
@@ -106,7 +108,7 @@ export type AmountFormat = (typeof AMOUNT_FORMATS)[number];
  * "1,234,567" or "1.234.567") — a number can have at most one decimal
  * point, so 2+ occurrences of the same separator can only be thousands
  * grouping. */
-export function parseAmount(raw: string, format: AmountFormat = "auto"): number | null {
+export function parseAmount(raw: string, format: AmountFormat = "auto"): string | null {
   let value = raw.trim().replace(/[\s ]/g, "");
   if (!value) return null;
 
@@ -128,16 +130,17 @@ export function parseAmount(raw: string, format: AmountFormat = "auto"): number 
     }
   }
 
-  const num = Number(value);
-  return Number.isFinite(num) ? num : null;
+  const units = moneyToUnits(value);
+  return units === null ? null : unitsToMoney(units);
 }
 
 /** Stable key for spotting a re-imported bank export that overlaps a
  * previous one — see pages/CsvImportPage.tsx's duplicate check. Matches on
- * date + type + amount (2dp) + description, the same fields the API
+ * date + type + amount (exact decimal) + description, the same fields the API
  * actually stores, so it works whether the "existing" side comes from a
  * Transaction or the "candidate" side from a freshly parsed CSV row. */
 export function transactionDedupeKey(date: string, type: string, amount: number | string, description: string): string {
-  const normalizedAmount = typeof amount === "number" ? amount : Number(amount);
-  return `${date}|${type}|${normalizedAmount.toFixed(2)}|${description.trim().toLowerCase()}`;
+  const units = moneyToUnits(String(amount));
+  const normalizedAmount = units === null ? String(amount) : unitsToMoney(units);
+  return `${date}|${type}|${normalizedAmount}|${description.trim().toLowerCase()}`;
 }

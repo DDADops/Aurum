@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { moneyToUnits, unitsToMoney } from "@/lib/money";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Input, Label } from "@/components/ui/Input";
 import { useTranslation } from "@/lib/i18n";
@@ -61,7 +62,9 @@ export function AlertThresholdsCard() {
   }
 
   function commitIdleCashAmount() {
-    const value = Math.max(MIN_AMOUNT, Number(idleCashAmount) || MIN_AMOUNT).toFixed(2);
+    const units = moneyToUnits(idleCashAmount);
+    if (units === null || units < 0n) return;
+    const value = unitsToMoney(units);
     setIdleCashAmount(value);
     if (settings && value !== settings.idle_cash_threshold_amount) {
       updateSettings.mutate({ idle_cash_threshold_amount: value });
@@ -128,7 +131,7 @@ export function AlertThresholdsCard() {
               id="idle-cash-amount-threshold"
               type="number"
               min={MIN_AMOUNT}
-              step={0.01}
+              step="0.000001"
               value={idleCashAmount}
               onChange={(event) => setIdleCashAmount(event.target.value)}
               onBlur={commitIdleCashAmount}

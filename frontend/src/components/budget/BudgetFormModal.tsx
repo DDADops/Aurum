@@ -88,8 +88,8 @@ export function BudgetFormModal({ open, onClose, budget, excludeCategoryIds }: B
           <Input
             id="budget-limit"
             type="number"
-            step="0.01"
-            min="0.01"
+            step="0.000001"
+            min="0.000001"
             required
             value={monthlyLimit}
             onChange={(event) => setMonthlyLimit(event.target.value)}

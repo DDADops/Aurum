@@ -2,14 +2,16 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from app.core.money import Money
+
 
 class BudgetCreate(BaseModel):
     category_id: int
-    monthly_limit: Decimal = Field(gt=0)
+    monthly_limit: Money = Field(gt=0)
 
 
 class BudgetUpdate(BaseModel):
-    monthly_limit: Decimal = Field(gt=0)
+    monthly_limit: Money = Field(gt=0)
 
 
 class BudgetRead(BaseModel):

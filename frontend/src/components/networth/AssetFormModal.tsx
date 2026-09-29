@@ -136,7 +136,7 @@ export function AssetFormModal({ open, onClose, asset }: AssetFormModalProps) {
             <Input
               id="asset-value"
               type="number"
-              step="0.01"
+              step="any"
               min="0"
               required
               value={form.value}
@@ -196,7 +196,7 @@ export function AssetFormModal({ open, onClose, asset }: AssetFormModalProps) {
           <Input
             id="asset-cash-flow"
             type="number"
-            step="0.01"
+            step="0.000001"
             placeholder={t("netWorth.form.cashFlowPlaceholder")}
             value={form.monthly_cash_flow}
             onChange={(event) => setForm((prev) => ({ ...prev, monthly_cash_flow: event.target.value }))}

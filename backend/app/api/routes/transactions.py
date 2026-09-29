@@ -1,5 +1,4 @@
 from datetime import date as date_
-from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,6 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_session
 from app.core.audit import log_destructive
+from app.core.money import sum_money
 from app.models.category import Category
 from app.models.enums import CategoryKind, TransactionType
 from app.models.tag import Tag
@@ -269,7 +269,7 @@ async def update_transaction(
 
     if payload.splits is not None:
         split_count = len(payload.splits)
-        split_total = sum((s.amount for s in payload.splits), Decimal("0")) if payload.splits else None
+        split_total = sum_money(s.amount for s in payload.splits) if payload.splits else None
     else:
         # Splits weren't touched by this patch — check the existing rows as
         # they stand. Reading straight off the ORM objects here (not
@@ -279,7 +279,7 @@ async def update_transaction(
         # values that were actually just fetched from the caller could ever
         # need to be re-validated, and those go through payload.splits above.
         split_count = len(transaction.splits)
-        split_total = sum((s.amount for s in transaction.splits), Decimal("0")) if transaction.splits else None
+        split_total = sum_money(s.amount for s in transaction.splits) if transaction.splits else None
     split_violation = split_rule_violation(
         type=effective_type,
         amount=effective_amount,

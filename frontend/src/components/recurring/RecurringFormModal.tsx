@@ -150,8 +150,8 @@ export function RecurringFormModal({ open, onClose, recurring }: RecurringFormMo
             <Input
               id="recurring-amount"
               type="number"
-              step="0.01"
-              min="0.01"
+              step="0.000001"
+              min="0.000001"
               required
               value={form.amount}
               onChange={(event) => setForm((prev) => ({ ...prev, amount: event.target.value }))}

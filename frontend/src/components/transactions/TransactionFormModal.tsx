@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { moneyToUnits, unitsToMoney, splitRemainder } from "@/lib/money";
 import { Plus, X } from "lucide-react";
 import { Dialog } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
@@ -9,7 +10,6 @@ import { useCategories } from "@/hooks/useCategories";
 import { useCreateTransaction, useUpdateTransaction } from "@/hooks/useTransactions";
 import { useTranslation } from "@/lib/i18n";
 import { buildHierarchicalCategories, translateCategoryName } from "@/lib/categoryLabels";
-import { formatCurrency } from "@/lib/format";
 import type { Tag, Transaction, TransactionInput, TransactionSplitInput, TransactionType } from "@/types";
 
 interface TransactionFormModalProps {
@@ -54,14 +54,6 @@ function generateRowKey(): string {
 
 function emptySplitRow(): SplitRowState {
   return { key: generateRowKey(), category_id: "", amount: "", note: "" };
-}
-
-// Cents, not floats — a plain Number sum of "0.10" + "0.20" style amounts can
-// drift from the transaction total by fractions of a cent, which would
-// falsely trip the "must add up exactly" check the backend also enforces.
-function toCents(value: string): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? Math.round(parsed * 100) : 0;
 }
 
 export function TransactionFormModal({ open, onClose, transaction }: TransactionFormModalProps) {
@@ -148,8 +140,7 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
   }
 
   const isSplitEditingNow = form.type !== "transfer" && splitMode;
-  const splitAllocatedCents = splitRows.reduce((sum, row) => sum + toCents(row.amount), 0);
-  const splitRemainingCents = toCents(form.amount) - splitAllocatedCents;
+  const splitRemainingUnits = splitRemainder(form.amount, splitRows.map((row) => row.amount));
 
   // The category select becomes the split's "base" category while
   // splitting — restricted to top-level categories — and each split row can
@@ -211,12 +202,11 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
         setError(t("transactions.form.errorSplitMinRows"));
         return;
       }
-      if (filledRows.some((row) => !row.category_id || !row.amount || Number(row.amount) <= 0)) {
+      if (filledRows.some((row) => !row.category_id || !row.amount || (moneyToUnits(row.amount) ?? 0n) <= 0n)) {
         setError(t("transactions.form.errorSplitIncomplete"));
         return;
       }
-      const allocatedCents = filledRows.reduce((sum, row) => sum + toCents(row.amount), 0);
-      if (allocatedCents !== toCents(form.amount)) {
+      if (splitRemainder(form.amount, filledRows.map((row) => row.amount)) !== 0n) {
         setError(t("transactions.form.errorSplitMismatch"));
         return;
       }
@@ -290,8 +280,8 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
             <Input
               id="amount"
               type="number"
-              step="0.01"
-              min="0.01"
+              step="0.000001"
+              min="0.000001"
               required
               value={form.amount}
               onChange={(event) => setForm((prev) => ({ ...prev, amount: event.target.value }))}
@@ -421,8 +411,8 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
                       <div className="flex items-center gap-1.5">
                         <Input
                           type="number"
-                          step="0.01"
-                          min="0.01"
+                          step="0.000001"
+                          min="0.000001"
                           className="w-24"
                           placeholder={t("transactions.form.amountLabel")}
                           value={row.amount}
@@ -457,14 +447,14 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
                     <Plus size={14} />
                     {t("transactions.form.splitAddRow")}
                   </button>
-                  <p className={`text-xs ${splitRemainingCents === 0 ? "text-success" : "text-text-muted"}`}>
-                    {splitRemainingCents > 0
+                  <p className={`text-xs ${splitRemainingUnits === 0n ? "text-success" : "text-text-muted"}`}>
+                    {splitRemainingUnits === null ? t("financial.unknown") : splitRemainingUnits > 0n
                       ? t("transactions.form.splitRemainingLabel", {
-                          amount: formatCurrency(splitRemainingCents / 100),
+                          amount: unitsToMoney(splitRemainingUnits),
                         })
-                      : splitRemainingCents < 0
+                      : splitRemainingUnits < 0n
                         ? t("transactions.form.splitOverAllocatedLabel", {
-                            amount: formatCurrency(Math.abs(splitRemainingCents) / 100),
+                            amount: unitsToMoney(-splitRemainingUnits),
                           })
                         : t("transactions.form.splitFullyAllocatedLabel")}
                   </p>

@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.money import Money
 from app.core.text import capitalize_first_letter
 from app.models.enums import RecurringFrequency, TransactionType
 
@@ -12,7 +13,7 @@ class RecurringTransactionCreate(BaseModel):
     category_id: int | None = None
     transfer_account_id: int | None = None
     type: TransactionType
-    amount: Decimal = Field(gt=0)
+    amount: Money = Field(gt=0)
     description: str = Field(min_length=1, max_length=255)
     merchant: str | None = None
     notes: str | None = Field(default=None, max_length=2000)
@@ -32,7 +33,7 @@ class RecurringTransactionUpdate(BaseModel):
     category_id: int | None = None
     transfer_account_id: int | None = None
     type: TransactionType | None = None
-    amount: Decimal | None = Field(default=None, gt=0)
+    amount: Money | None = Field(default=None, gt=0)
     description: str | None = Field(default=None, min_length=1, max_length=255)
     merchant: str | None = None
     notes: str | None = Field(default=None, max_length=2000)

@@ -1,5 +1,6 @@
 """A single money movement: income, expense, or a transfer between accounts."""
 from datetime import date as date_
+from decimal import Decimal
 
 from sqlalchemy import Date, Enum, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -25,7 +26,7 @@ class Transaction(Base, TimestampMixin):
         Enum(TransactionType, name="transaction_type", native_enum=False, length=10), nullable=False
     )
     # Always stored positive; `type` carries the sign/direction.
-    amount: Mapped[Numeric] = mapped_column(Numeric(14, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(20, 6, asdecimal=True), nullable=False)
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     merchant: Mapped[str | None] = mapped_column(String(150), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -59,7 +60,7 @@ class TransactionSplit(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     transaction_id: Mapped[int] = mapped_column(ForeignKey("transactions.id", ondelete="CASCADE"), nullable=False)
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"), nullable=True)
-    amount: Mapped[Numeric] = mapped_column(Numeric(14, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(20, 6, asdecimal=True), nullable=False)
     note: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     transaction: Mapped["Transaction"] = relationship(back_populates="splits")

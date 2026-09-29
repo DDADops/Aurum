@@ -3,23 +3,25 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.money import Money
+
 
 class GoalCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
-    target_amount: Decimal = Field(gt=0)
+    target_amount: Money = Field(gt=0)
     target_date: date_ | None = None
 
 
 class GoalUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=150)
-    target_amount: Decimal | None = Field(default=None, gt=0)
+    target_amount: Money | None = Field(default=None, gt=0)
     target_date: date_ | None = None
 
 
 class GoalContributionCreate(BaseModel):
     # Negative allowed — a withdrawal from the goal is still a contribution
     # to its running total, just in the other direction. Zero is pointless.
-    amount: Decimal
+    amount: Money
     date: date_
     note: str | None = Field(default=None, max_length=200)
 

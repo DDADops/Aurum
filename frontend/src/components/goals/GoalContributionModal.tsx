@@ -57,7 +57,7 @@ export function GoalContributionModal({ open, onClose, goal }: GoalContributionM
             <Input
               id="contribution-amount"
               type="number"
-              step="0.01"
+              step="0.000001"
               required
               placeholder={t("goal.contribution.amountPlaceholder")}
               value={amount}

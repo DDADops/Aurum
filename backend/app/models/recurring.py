@@ -5,6 +5,7 @@ from anchor_date + last_posted_date, and how "Post now" creates a real
 Transaction row from the template.
 """
 from datetime import date as date_
+from decimal import Decimal
 
 from sqlalchemy import Boolean, Date, Enum, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -28,7 +29,7 @@ class RecurringTransaction(Base, TimestampMixin):
     type: Mapped[TransactionType] = mapped_column(
         Enum(TransactionType, name="recurring_transaction_type", native_enum=False, length=10), nullable=False
     )
-    amount: Mapped[Numeric] = mapped_column(Numeric(14, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(20, 6, asdecimal=True), nullable=False)
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     merchant: Mapped[str | None] = mapped_column(String(150), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

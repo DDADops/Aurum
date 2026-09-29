@@ -84,14 +84,14 @@ describe("preset formats against real sample rows", () => {
     const [, row] = parseCsv(TBANK_CSV);
     const preset = findPreset("tbank")!;
     expect(parseDateWithFormat(row[0], preset.dateFormat)).toBe("2018-10-24");
-    expect(parseAmount(row[6], preset.amountFormat)).toBe(-882.04);
+    expect(parseAmount(row[6], preset.amountFormat)).toBe("-882.04");
   });
 
   it("parses monobank's timestamped date and dot-decimal amount", () => {
     const [, row] = parseCsv(MONOBANK_CSV);
     const preset = findPreset("monobank")!;
     expect(parseDateWithFormat(row[0], preset.dateFormat)).toBe("2024-03-01");
-    expect(parseAmount(row[3], preset.amountFormat)).toBe(-250.5);
+    expect(parseAmount(row[3], preset.amountFormat)).toBe("-250.5");
     // monobank writes empty cells as an em dash — must not parse as 0.
     expect(parseAmount(row[6], preset.amountFormat)).toBeNull();
   });
@@ -100,7 +100,7 @@ describe("preset formats against real sample rows", () => {
     const [, row] = parseCsv(PRIVAT_CSV);
     const preset = findPreset("privatbank")!;
     expect(parseDateWithFormat(row[0], preset.dateFormat)).toBe("2024-02-05");
-    expect(parseAmount(row[5], preset.amountFormat)).toBe(-320);
+    expect(parseAmount(row[5], preset.amountFormat)).toBe("-320");
   });
 });
 

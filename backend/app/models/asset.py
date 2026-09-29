@@ -5,6 +5,7 @@ balances so there's a single source of truth for money that already flows
 through the Transactions feature. See services/net_worth_service.py.
 """
 from datetime import date as date_
+from decimal import Decimal
 
 from sqlalchemy import Date, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -35,7 +36,7 @@ class Asset(Base, TimestampMixin):
     # paid, ...). Informational only — real-world cash flow for an asset
     # varies month to month, so this is never treated as ground truth the
     # way Transaction amounts are.
-    monthly_cash_flow: Mapped[Numeric | None] = mapped_column(Numeric(14, 2), nullable=True)
+    monthly_cash_flow: Mapped[Decimal | None] = mapped_column(Numeric(20, 6, asdecimal=True), nullable=True)
 
     # User-assigned, not inferred (see RiskLevel docstring) — how likely
     # this asset is to lose value, independent of asset_class or capital_role.
@@ -59,7 +60,7 @@ class AssetValuation(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), nullable=False)
-    value: Mapped[Numeric] = mapped_column(Numeric(14, 2), nullable=False)
+    value: Mapped[Decimal] = mapped_column(Numeric(38, 18, asdecimal=True), nullable=False)
     as_of_date: Mapped[date_] = mapped_column(Date, nullable=False)
 
     asset: Mapped["Asset"] = relationship(back_populates="valuations")

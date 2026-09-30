@@ -1,6 +1,6 @@
 """Account CRUD, plus each account's live balance — summed from its
-Transaction rows (income adds, expense subtracts, a transfer moves the
-amount from the source account to the destination account) rather than
+Transaction rows (income adds, expense subtracts, transfers debit source amount
+and credit destination amount in each account's native currency) rather than
 stored, the same "derive it, don't duplicate it" approach
 net_worth_service.py uses for Cash.
 """
@@ -16,15 +16,17 @@ from app.models.account import Account
 from app.models.enums import TransactionType
 from app.models.transaction import Transaction
 from app.schemas.account import AccountCreate, AccountUpdate, AccountWithBalance
+from app.schemas.money import FinancialDataIssue
 from app.services.currency_history import account_has_history
 
 
-async def _account_balances(session: AsyncSession) -> dict[int, Decimal]:
+async def _account_balances(session: AsyncSession) -> dict[int, Decimal | None]:
     result = await session.execute(
-        select(Transaction.type, Transaction.amount, Transaction.account_id, Transaction.transfer_account_id)
+        select(Transaction.type, Transaction.amount, Transaction.account_id, Transaction.transfer_account_id, Transaction.transfer_amount)
     )
     balances: dict[int, Decimal] = defaultdict(Decimal)
-    for tx_type, amount, account_id, transfer_account_id in result.all():
+    unresolved: set[int] = set()
+    for tx_type, amount, account_id, transfer_account_id, transfer_amount in result.all():
         if tx_type == TransactionType.INCOME:
             balances[account_id] += amount
         elif tx_type == TransactionType.EXPENSE:
@@ -32,11 +34,14 @@ async def _account_balances(session: AsyncSession) -> dict[int, Decimal]:
         elif tx_type == TransactionType.TRANSFER:
             balances[account_id] -= amount
             if transfer_account_id is not None:
-                balances[transfer_account_id] += amount
-    return balances
+                if transfer_amount is None:
+                    unresolved.add(transfer_account_id)
+                else:
+                    balances[transfer_account_id] += transfer_amount
+    return {**balances, **dict.fromkeys(unresolved)}
 
 
-def _to_read(account: Account, balance: Decimal, has_history: bool) -> AccountWithBalance:
+def _to_read(account: Account, balance: Decimal | None, has_history: bool) -> AccountWithBalance:
     return AccountWithBalance(
         id=account.id,
         name=account.name,
@@ -46,6 +51,8 @@ def _to_read(account: Account, balance: Decimal, has_history: bool) -> AccountWi
         is_archived=account.is_archived,
         balance=balance,
         has_monetary_history=has_history,
+        complete=balance is not None,
+        data_issues=[] if balance is not None else [FinancialDataIssue(code="transfer_amount_unresolved")],
     )
 
 
@@ -86,8 +93,12 @@ async def update_account(session: AsyncSession, account_id: int, payload: Accoun
 
 
 async def delete_account(session: AsyncSession, account_id: int) -> None:
-    account = await session.get(Account, account_id)
+    account = await session.scalar(
+        select(Account).where(Account.id == account_id).with_for_update().execution_options(populate_existing=True)
+    )
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
+    if await account_has_history(session, account_id):
+        raise HTTPException(409, "account_delete_requires_empty_history")
     await session.delete(account)
     await session.commit()

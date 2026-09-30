@@ -85,12 +85,12 @@ from escaping as valid current breakdowns. It is not a new balance engine.
     today = date.today()
     source, destination = aliased(Account), aliased(Account)
     rows = (await session.execute(
-        select(Transaction.type, source.currency, source.type, destination.currency, destination.type)
+        select(Transaction.type, source.currency, source.type, destination.currency, destination.type, Transaction.transfer_amount)
         .join(source, Transaction.account_id == source.id)
         .outerjoin(destination, Transaction.transfer_account_id == destination.id)
     )).all()
     statuses = []
-    for kind, src_currency, src_type, dst_currency, dst_type in rows:
+    for kind, src_currency, src_type, dst_currency, dst_type, transfer_amount in rows:
         source_used = account_types is None or src_type in account_types
         destination_used = dst_type is not None and (account_types is None or dst_type in account_types)
         if source_used:
@@ -98,7 +98,7 @@ from escaping as valid current breakdowns. It is not a new balance engine.
         if kind == TransactionType.TRANSFER:
             if destination_used:
                 statuses.append(currency_status(dst_currency, currency, today))
-                if src_currency != dst_currency:
+                if src_currency != dst_currency or transfer_amount is None:
                     statuses.append(FinancialDataStatus(complete=False, data_issues=[
                         FinancialDataIssue(code="transfer_amount_unresolved")]))
             elif source_used and dst_currency is None:

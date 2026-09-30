@@ -51,24 +51,22 @@ The previous precision migration test inserts only legacy columns while the
 previous schema is installed, and restores the current head before returning.
 
 Account PATCH locks the Account row and then queries transaction history on
-both source and destination references. The concurrency test uses a cooperative
-writer holding that same lock. **Transaction create/PATCH/bulk and recurring
-posting do not yet implement the complementary Account lock protocol**: commit 5
-must lock all affected accounts in stable ID order before currency-dependent
-validation and writes. Do not treat this intermediate commit as full race
-protection. Asset PATCH similarly locks Asset before checking valuations and
-crypto transactions; the valuation/crypto writer protocol and quote metadata
-still need completion in the corresponding later work.
+both source and destination references. The original guard test uses a
+cooperative writer; `test_native_transfers.py` now exercises real HTTP create,
+bulk, PATCH, DELETE and recurring posting against concurrent currency changes.
+Asset PATCH locks Asset before checking valuations and crypto transactions;
+the valuation/crypto writer protocol and quote metadata remain later work.
 
-Recurring snapshots remain unchanged by Account PATCH. Until the recurring
-posting implementation is replaced, posting refuses stale source snapshots,
-missing/unresolved destinations and transfers the old writer cannot faithfully
-represent (`409 recurring_currency_revalidation_required`). No automatic FX,
-revalidation, transaction destination write behavior or balance rewrite is
-implemented here. Budget/Goal reads expose native currencies; currency-aware
-budget aggregation remains later work. Budget currency edits require an
-explicit replacement limit; Goal currency edits require a replacement target
-and no contributions. Goal contribution writes share the Goal row lock.
+Recurring snapshots remain unchanged by Account PATCH. The supported posting
+path joins transaction Account locks and native amount validation. It refuses
+concurrently edited templates with a retryable conflict (NOWAIT avoids inverse
+lock order), and retains the transitional refusal for stale snapshots and
+transfers requiring the later recurring implementation (`409 recurring_currency_revalidation_required`).
+No automatic FX or full recurring revalidation is implemented here. Budget/Goal
+reads expose native currencies; currency-aware budget aggregation remains later
+work. Budget currency edits require an explicit replacement limit; Goal currency
+edits require a replacement target and no contributions. Goal contribution
+writes share the Goal row lock.
 
 Asset currency changes require explicit replacement/clearing of existing
 monthly cash flow (including zero). On an empty holding they clear `last_price`
@@ -92,3 +90,50 @@ refuses authoritative destination amounts incompatible with the old schema
 from legacy settings, or recurring snapshots differing from their accounts.
 Run schema migrations with application writers stopped, and recreate pooled
 asyncpg connections after DDL to avoid stale prepared-statement metadata.
+
+
+## Native transfer writers
+
+New transfers require existing, distinct source/destination accounts. Under
+Account locks, same-currency destination amounts normalize to source amount
+(unequal explicit amounts fail); cross-currency transfers require an explicit
+positive destination amount at scale 6. No settings currency or FX rate is used.
+Non-transfers reject non-null transfer-only fields. Bulk locks the batch's whole
+account union once and commits only after every item validates.
+
+Financial PATCH fields are `type`, `account_id`, `transfer_account_id`, `amount`,
+`transfer_amount`, `category_id`, `splits`, and `date`, based on field presence.
+Validation uses the final state. Same-currency debit edits normalize the credit;
+for an unchanged cross-currency pair, an existing authoritative credit remains
+independent of a debit edit. Any account-pair change ending cross-currency
+requires an explicit destination amount (also when the new account uses the
+same currency as the old one). Transfer-to-income/expense clears omitted inherited
+transfer fields but rejects explicit non-null ones. Legacy unresolved/missing
+counterparties remain readable and allow notes/description/merchant/tag edits;
+financial edits must reconcile the final state. Split equality remains exact.
+
+All writers lock Accounts by ascending ID and refresh ORM state after waiting.
+PATCH/DELETE discover old references, lock old/requested account union, then lock
+and reload the Transaction. If its references changed, they return
+`409 transaction_accounts_changed_retry` rather than add locks out of order.
+DELETE holds locks through removal/commit. Account DELETE locks its own row and
+returns `409 account_delete_requires_empty_history` for any source/destination
+history; archive remains available. Existing CASCADE/SET NULL FKs are unchanged;
+no migration was needed. Direct SQL and full backup restore are not ordinary
+transaction writer endpoints and must not run concurrently with application
+writers; versioned restore coordination remains backup-v2 work.
+
+Transaction reads include both accounts, destination amount, completeness issues
+and a derived Decimal `effective_rate` (80 significant digits for repeating
+quotients). Unknown amounts/rates stay null. This rate is informational, not FX.
+The only balance adjustment is native Account crediting using `transfer_amount`;
+an unresolved incoming amount yields null balance with an issue, not zero or a
+partial total. Source debit remains known. No account conversion is implemented.
+
+Remaining balance readers: `net_worth_service._cash_cumulative_events` and
+`insights_service._idle_cash_account_count` still use old transfer arithmetic;
+`financial_data_service.capital_status` remains a conservative guard for them
+and now also suppresses unresolved same-currency amounts. Its cross-currency
+classification and reader arithmetic must be completed in the balance stage.
+FX, full Net Worth conversion, crypto metadata, recurring reconciliation,
+backup v2 and frontend transfer input remain separate commits.

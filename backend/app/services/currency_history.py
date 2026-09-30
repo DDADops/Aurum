@@ -1,7 +1,7 @@
 """Dynamic history predicates, shared by currency guards and read metadata.
 
 Account updates lock their parent row before these queries. Transaction writers
-must join that locking protocol in commit 5; this alone is not race protection.
+share that protocol through transaction_service; predicates alone are not locks.
 No recurring instruction or empty holding is historical money.
 """
 from sqlalchemy import exists, or_, select

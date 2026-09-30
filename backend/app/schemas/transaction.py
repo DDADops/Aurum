@@ -1,13 +1,14 @@
 from datetime import date as date_
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
-from app.core.money import Money, sum_money
+from app.core.money import Money, effective_transfer_rate, sum_money
 from app.core.text import capitalize_first_letter
 from app.models.enums import TransactionType
 from app.schemas.account import AccountRead
 from app.schemas.category import CategoryRead
+from app.schemas.money import FinancialDataIssue, FinancialDataStatus
 from app.schemas.tag import TagRead
 
 
@@ -35,7 +36,7 @@ def transfer_rule_violation(
             return "transfer_account_id must differ from account_id"
         if category_id:
             return "category_id is not valid for transfer transactions"
-    elif transfer_account_id:
+    elif transfer_account_id is not None:
         return "transfer_account_id is only valid for transfer transactions"
     return None
 
@@ -122,6 +123,7 @@ class TransactionSplitInput(BaseModel):
 
 
 class TransactionCreate(TransactionBase):
+    transfer_amount: Money | None = Field(default=None, gt=0)
     tag_ids: list[int] = Field(default_factory=list)
     # None/omitted -> a normal single-category transaction, unchanged from
     # before. 2+ entries -> the amount is divided across categories instead
@@ -132,6 +134,8 @@ class TransactionCreate(TransactionBase):
 
     @model_validator(mode="after")
     def _validate_splits(self) -> "TransactionCreate":
+        if self.type != TransactionType.TRANSFER and self.transfer_amount is not None:
+            raise ValueError("transfer_amount is only valid for transfer transactions")
         splits = self.splits or []
         violation = split_rule_violation(
             type=self.type,
@@ -146,6 +150,7 @@ class TransactionCreate(TransactionBase):
 
 
 class TransactionUpdate(BaseModel):
+    transfer_amount: Money | None = Field(default=None, gt=0)
     account_id: int | None = None
     category_id: int | None = None
     transfer_account_id: int | None = None
@@ -161,6 +166,13 @@ class TransactionUpdate(BaseModel):
     # split set (send [] together with a category_id to turn a split
     # transaction back into a normal single-category one).
     splits: list[TransactionSplitInput] | None = None
+
+    @field_validator("account_id", "type", "amount", "description", "date")
+    @classmethod
+    def _not_null_when_supplied(cls, value):
+        if value is None:
+            raise ValueError("Field cannot be null")
+        return value
 
     @field_validator("description")
     @classmethod
@@ -178,15 +190,34 @@ class TransactionSplitRead(BaseModel):
     note: str | None
 
 
-class TransactionRead(TransactionFields):
+class TransactionRead(TransactionFields, FinancialDataStatus):
     transfer_amount: Decimal | None = None
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     account: AccountRead
+    transfer_account: AccountRead | None = None
     category: CategoryRead | None = None
     tags: list[TagRead] = Field(default_factory=list)
     splits: list[TransactionSplitRead] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _native_completeness(self) -> "TransactionRead":
+        self.data_issues = []
+        if self.type == TransactionType.TRANSFER:
+            if self.transfer_account is None:
+                self.data_issues.append(FinancialDataIssue(code="transfer_destination_missing"))
+            elif self.transfer_amount is None:
+                self.data_issues.append(FinancialDataIssue(code="transfer_amount_unresolved"))
+        self.complete = not self.data_issues
+        return self
+
+    @computed_field
+    @property
+    def effective_rate(self) -> Decimal | None:
+        if self.type != TransactionType.TRANSFER or not self.complete:
+            return None
+        return effective_transfer_rate(self.amount, self.transfer_amount)
 
 
 class TransactionPage(BaseModel):

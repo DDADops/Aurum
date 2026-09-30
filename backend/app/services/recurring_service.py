@@ -9,8 +9,10 @@ from datetime import date as date_
 from datetime import timedelta
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import selectinload
 
 from app.core.currency import normalize_currency
@@ -20,6 +22,8 @@ from app.models.enums import CategoryKind, RecurringFrequency, TransactionType
 from app.models.recurring import RecurringTransaction
 from app.models.transaction import Transaction
 from app.schemas.recurring import RecurringTransactionCreate, RecurringTransactionRead, RecurringTransactionUpdate
+from app.schemas.transaction import TransactionCreate
+from app.services.transaction_service import lock_accounts, normalize_transfer
 
 _EAGER = (
     selectinload(RecurringTransaction.account),
@@ -177,8 +181,25 @@ async def post_recurring(session: AsyncSession, recurring_id: int) -> RecurringT
     """Creates a real Transaction from the template, dated today, and moves
     last_posted_date forward — the only thing that advances the schedule."""
     recurring = await _get_or_404(session, recurring_id)
-    # Transitional refusal only. Full posting/revalidation and writer locks
-    # belong to the transaction/recurring commits, not this persistence step.
+    references = (recurring.account_id, recurring.transfer_account_id)
+    accounts = await lock_accounts(session, references)
+    # Older template-edit paths can hold the template before touching a new
+    # account FK. Do not wait on that inverse lock order while holding Accounts.
+    try:
+        recurring = await session.scalar(
+            select(RecurringTransaction).where(RecurringTransaction.id == recurring_id).options(*_EAGER)
+            .with_for_update(nowait=True).execution_options(populate_existing=True)
+        )
+    except DBAPIError as exc:
+        if getattr(exc.orig, "sqlstate", None) == "55P03":
+            raise HTTPException(409, "recurring_instruction_changed_retry") from exc
+        raise
+    if recurring is None:
+        raise HTTPException(404, "Recurring transaction not found")
+    if (recurring.account_id, recurring.transfer_account_id) != references:
+        raise HTTPException(409, "recurring_accounts_changed_retry")
+    # Retain the transitional refusal; full recurring revalidation is later.
+    # The remaining supported posting path now joins the Account lock protocol.
     if recurring.amount_currency != normalize_currency(recurring.account.currency):
         raise HTTPException(409, "recurring_currency_revalidation_required")
     if recurring.type == TransactionType.TRANSFER and (
@@ -190,19 +211,19 @@ async def post_recurring(session: AsyncSession, recurring_id: int) -> RecurringT
         raise HTTPException(409, "recurring_currency_revalidation_required")
     today = date_.today()
 
-    session.add(
-        Transaction(
-            account_id=recurring.account_id,
-            category_id=recurring.category_id,
-            transfer_account_id=recurring.transfer_account_id,
-            type=recurring.type,
-            amount=recurring.amount,
-            description=recurring.description,
-            merchant=recurring.merchant,
-            notes=recurring.notes,
-            date=today,
+    try:
+        payload = TransactionCreate(
+            account_id=recurring.account_id, category_id=recurring.category_id,
+            transfer_account_id=recurring.transfer_account_id, transfer_amount=recurring.transfer_amount,
+            type=recurring.type, amount=recurring.amount, description=recurring.description,
+            merchant=recurring.merchant, notes=recurring.notes, date=today,
         )
-    )
+    except ValidationError as exc:
+        raise HTTPException(409, "recurring_currency_revalidation_required") from exc
+    fields = payload.model_dump(exclude={"tag_ids", "splits"})
+    normalize_transfer(fields, accounts)
+    await _ensure_category_matches_type(session, payload.category_id, payload.type)
+    session.add(Transaction(**fields))
     recurring.last_posted_date = today
     await session.commit()
     return _to_read(await _get_or_404(session, recurring_id))

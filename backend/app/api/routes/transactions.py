@@ -22,13 +22,14 @@ from app.schemas.transaction import (
     TransactionSplitInput,
     TransactionUpdate,
     split_rule_violation,
-    transfer_rule_violation,
 )
+from app.services.transaction_service import FINANCIAL_PATCH_FIELDS, lock_accounts, lock_transaction, normalize_transfer
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
 _EAGER = (
     selectinload(Transaction.account),
+    selectinload(Transaction.transfer_account),
     selectinload(Transaction.category),
     selectinload(Transaction.tags),
     selectinload(Transaction.splits).selectinload(TransactionSplit.category),
@@ -195,8 +196,10 @@ async def list_transaction_years(session: AsyncSession = Depends(get_session)) -
 
 @router.post("", response_model=TransactionRead, status_code=201)
 async def create_transaction(payload: TransactionCreate, session: AsyncSession = Depends(get_session)) -> Transaction:
-    await _ensure_category_matches_type(session, payload.category_id, payload.type)
+    accounts = await lock_accounts(session, [payload.account_id, payload.transfer_account_id])
     fields = payload.model_dump(exclude={"tag_ids", "splits"})
+    normalize_transfer(fields, accounts)
+    await _ensure_category_matches_type(session, payload.category_id, payload.type)
     transaction = Transaction(**fields)
     transaction.tags = await _resolve_tags(session, payload.tag_ids)
     if payload.splits:
@@ -216,12 +219,17 @@ async def bulk_create_transactions(
     """CSV import lands here — see schemas.TransactionBulkCreate. All rows
     are validated before any is added, so a bad row 400s the whole request
     instead of leaving a half-imported statement behind."""
+    accounts = await lock_accounts(session, [
+        id_ for item in payload.items for id_ in (item.account_id, item.transfer_account_id)
+    ])
     for item in payload.items:
         await _ensure_category_matches_type(session, item.category_id, item.type)
 
     transactions = []
     for item in payload.items:
-        transaction = Transaction(**item.model_dump(exclude={"tag_ids", "splits"}))
+        fields = item.model_dump(exclude={"tag_ids", "splits"})
+        normalize_transfer(fields, accounts)
+        transaction = Transaction(**fields)
         transaction.tags = await _resolve_tags(session, item.tag_ids)
         if item.splits:
             transaction.splits = await _build_splits(session, item.splits, item.type)
@@ -239,33 +247,46 @@ async def bulk_create_transactions(
 async def update_transaction(
     transaction_id: int, payload: TransactionUpdate, session: AsyncSession = Depends(get_session)
 ) -> Transaction:
-    # Eager-loads tags and splits — assigning transaction.tags/splits below
-    # would otherwise lazy-load the current collection first to diff
-    # against, which async SQLAlchemy can't do outside an explicit await
-    # (MissingGreenlet).
-    transaction = await session.get(
-        Transaction, transaction_id, options=[selectinload(Transaction.tags), selectinload(Transaction.splits)]
+    transaction, accounts = await lock_transaction(
+        session, transaction_id, [payload.account_id, payload.transfer_account_id],
     )
-    if transaction is None:
-        raise HTTPException(status_code=404, detail="Transaction not found")
     updates = payload.model_dump(exclude_unset=True, exclude={"tag_ids", "splits"})
-    # Checks run against the row as it would look after the patch, not just
-    # the fields sent: switching type alone can invalidate fields left
-    # untouched.
+    financial = bool(payload.model_fields_set & FINANCIAL_PATCH_FIELDS)
     effective_type = updates.get("type", transaction.type)
     effective_category_id = updates.get("category_id", transaction.category_id)
     effective_account_id = updates.get("account_id", transaction.account_id)
     effective_transfer_account_id = updates.get("transfer_account_id", transaction.transfer_account_id)
     effective_amount = updates.get("amount", transaction.amount)
-    await _ensure_category_matches_type(session, effective_category_id, effective_type)
-    violation = transfer_rule_violation(
-        type=effective_type,
-        account_id=effective_account_id,
-        transfer_account_id=effective_transfer_account_id,
-        category_id=effective_category_id,
-    )
-    if violation:
-        raise HTTPException(status_code=400, detail=violation)
+    if financial:
+        # Explicit irrelevant values are rejected; omitted inherited transfer
+        # fields are cleared when converting to an ordinary transaction.
+        if effective_type != TransactionType.TRANSFER:
+            if updates.get("transfer_account_id") is not None or updates.get("transfer_amount") is not None:
+                raise HTTPException(400, "Transfer-only fields are not valid for income/expense")
+            effective_transfer_account_id = None
+            destination_amount = None
+        else:
+            # Reconciliation and account-pair changes require an explicit
+            # destination amount for a cross-currency final state. For a fixed
+            # pair, an existing authoritative credit is independent of debit.
+            pair_changed = (effective_account_id, effective_transfer_account_id) != (
+                transaction.account_id, transaction.transfer_account_id,
+            )
+            source = accounts.get(effective_account_id)
+            destination = accounts.get(effective_transfer_account_id)
+            same_currency = source is not None and destination is not None and source.currency.upper() == destination.currency.upper()
+            if "transfer_amount" in payload.model_fields_set:
+                destination_amount = payload.transfer_amount
+            elif same_currency or pair_changed or transaction.type != TransactionType.TRANSFER:
+                destination_amount = None
+            else:
+                destination_amount = transaction.transfer_amount
+        final = dict(type=effective_type, category_id=effective_category_id,
+                     account_id=effective_account_id, transfer_account_id=effective_transfer_account_id,
+                     amount=effective_amount, transfer_amount=destination_amount)
+        normalize_transfer(final, accounts)
+        updates.update(transfer_account_id=final["transfer_account_id"], transfer_amount=final["transfer_amount"])
+        await _ensure_category_matches_type(session, effective_category_id, effective_type)
 
     if payload.splits is not None:
         split_count = len(payload.splits)
@@ -287,7 +308,7 @@ async def update_transaction(
         split_count=split_count,
         split_total=split_total,
     )
-    if split_violation:
+    if financial and split_violation:
         raise HTTPException(status_code=400, detail=split_violation)
 
     for field, value in updates.items():
@@ -305,8 +326,6 @@ async def update_transaction(
 
 @router.delete("/{transaction_id}", status_code=204)
 async def delete_transaction(transaction_id: int, session: AsyncSession = Depends(get_session)) -> None:
-    transaction = await session.get(Transaction, transaction_id)
-    if transaction is None:
-        raise HTTPException(status_code=404, detail="Transaction not found")
+    transaction, _ = await lock_transaction(session, transaction_id)
     await session.delete(transaction)
     await session.commit()

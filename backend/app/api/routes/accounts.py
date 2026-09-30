@@ -32,7 +32,6 @@ async def update_account_route(
 
 @router.delete("/{account_id}", status_code=204)
 async def delete_account_route(account_id: int, session: AsyncSession = Depends(get_session)) -> None:
-    # Takes every transaction on the account with it, so it's worth a line in
-    # the log even though the UI asks for confirmation first.
+    # History-bearing accounts must be archived; deletion requires empty history.
     await delete_account(session, account_id)
     log_destructive("account.deleted", account_id=account_id)

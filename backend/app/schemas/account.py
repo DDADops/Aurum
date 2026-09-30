@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.currency import CurrencyCode, CurrencyUpdate
 from app.models.enums import AccountType
+from app.schemas.money import FinancialDataStatus
 
 
 class AccountBase(BaseModel):
@@ -36,11 +37,11 @@ class AccountRead(AccountBase):
     is_archived: bool
 
 
-class AccountWithBalance(AccountRead):
+class AccountWithBalance(AccountRead, FinancialDataStatus):
     """The Accounts page's shape — adds the live balance (see
     services/account_service.py), summed from Transaction rows rather than
     stored, the same "derive it" approach net_worth_service.py uses for
     Cash. Used only by /api/accounts' own endpoints, never nested."""
 
     has_monetary_history: bool
-    balance: Decimal
+    balance: Decimal | None

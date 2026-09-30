@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import text
 
 from app.schemas.money import FinancialDataIssue, FinancialDataStatus, MissingRate
 from tests.helpers import txn_payload
@@ -105,9 +106,13 @@ async def test_net_worth_asset_currency(client, foreign):
         assert Decimal(body["current"]) == 100
 
 
-async def test_legacy_transfer_destination_is_unresolved_but_source_metric_is_known(client, account_id):
+async def test_legacy_transfer_destination_is_unresolved_but_source_metric_is_known(client, account_id, test_sessionmaker):
     rub = await account(client, "RUB")
-    await post(client, account_id, type="transfer", amount="100", transfer_account_id=rub)
+    created = await post(client, account_id, type="transfer", amount="100", transfer_account_id=rub, transfer_amount="1000")
+    # Legacy state can be restored/migrated, but cannot be created by the new API.
+    async with test_sessionmaker() as session:
+        await session.execute(text("UPDATE transactions SET transfer_amount=NULL WHERE id=:id"), {"id": created["id"]})
+        await session.commit()
     body = (await client.get("/net-worth/summary?range=30d")).json()
     assert body["complete"] is False and body["current"] is None
     assert {"code": "transfer_amount_unresolved"} in body["data_issues"]

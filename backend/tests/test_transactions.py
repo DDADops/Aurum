@@ -12,6 +12,7 @@ from datetime import date
 from decimal import Decimal
 
 from httpx import AsyncClient
+from sqlalchemy import text
 
 from tests.helpers import money, txn_payload as _txn
 
@@ -381,7 +382,7 @@ async def test_update_rejects_a_category_on_a_transfer(client: AsyncClient, acco
 
 
 async def test_a_transfer_whose_destination_account_was_deleted_can_still_be_listed(
-    client: AsyncClient, account_id
+    client: AsyncClient, account_id, test_sessionmaker
 ):
     """Deleting an account nulls transfer_account_id on the transfers that
     pointed at it (the FK is ON DELETE SET NULL), leaving a row that create
@@ -394,12 +395,20 @@ async def test_a_transfer_whose_destination_account_was_deleted_can_still_be_lis
         "/transactions", json=_txn(account_id, type="transfer", transfer_account_id=other["id"], category_id=None)
     )
     txn_id = created.json()["id"]
-    assert (await client.delete(f"/accounts/{other['id']}")).status_code == 204
+    assert (await client.delete(f"/accounts/{other['id']}")).status_code == 409
+    # Simulate a legacy deletion: new API deletions no longer permit this.
+    async with test_sessionmaker() as session:
+        await session.execute(text("DELETE FROM accounts WHERE id=:id"), {"id": other["id"]})
+        await session.commit()
 
     listing = await client.get("/transactions")
 
     assert listing.status_code == 200
-    assert txn_id in [item["id"] for item in listing.json()["items"]]
+    item = next(item for item in listing.json()["items"] if item["id"] == txn_id)
+    assert item["complete"] is False and item["effective_rate"] is None
+    assert item["data_issues"] == [{"code": "transfer_destination_missing"}]
+    assert (await client.patch(f"/transactions/{txn_id}", json={"notes": "Legacy destination deleted"})).status_code == 200
+    assert (await client.patch(f"/transactions/{txn_id}", json={"amount": "20"})).status_code == 400
     assert (await client.delete(f"/transactions/{txn_id}")).status_code == 204
 
 

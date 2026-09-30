@@ -1,4 +1,4 @@
-"""Persistence-step guarantees; transaction-writer locking is deferred to commit 5."""
+"""Persistence guarantees; transaction-writer races are in test_native_transfers.py."""
 import asyncio
 import builtins
 import runpy
@@ -143,8 +143,8 @@ async def test_asset_history_cash_flow_and_crypto_cache(client, test_sessionmake
 
 
 async def test_account_update_waits_for_parent_lock_then_checks_history(client, account_id, test_sessionmaker):
-    # This writer deliberately acquires the future protocol's lock. Real
-    # transaction endpoints join that protocol in commit 5, not in this test.
+    # This focused guard test uses a cooperative writer. Real HTTP writer
+    # interleavings are covered separately in test_native_transfers.py.
     task = None
     async with test_sessionmaker() as writer:
         await writer.execute(select(Account).where(Account.id == account_id).with_for_update())
@@ -272,14 +272,11 @@ async def test_migration_missing_settings_uses_frozen_default(test_sessionmaker,
         migrate("upgrade", HEAD)
 
 
-async def test_backup_v1_extension_preserves_authoritative_and_unresolved_fields(client, account_id, categories, test_sessionmaker):
+async def test_backup_v1_extension_preserves_authoritative_and_unresolved_fields(client, account_id, categories):
     destination = await new_account(client, "VND")
-    response = await client.post("/transactions", json=txn_payload(account_id, type="transfer", transfer_account_id=destination, amount="1"))
-    id_ = response.json()["id"]
-    async with test_sessionmaker() as session:
-        transaction = await session.get(Transaction, id_)
-        transaction.transfer_amount = Decimal("25000.123456")
-        await session.commit()
+    response = await client.post("/transactions", json=txn_payload(
+        account_id, type="transfer", transfer_account_id=destination, amount="1", transfer_amount="25000.123456"))
+    assert response.status_code == 201, response.text
     await client.post("/budgets", json={"category_id": categories["Groceries"]["id"], "monthly_limit": "12", "currency": "RUB"})
     await client.post("/goals", json={"name": "Native goal", "target_amount": "30", "currency": "VND"})
     await template(client, account_id, type="transfer", transfer_account_id=destination,

@@ -76,15 +76,17 @@ and all five cached price-change fields. No quote currency metadata or sync
 service changes are introduced; future price refresh validation belongs to the
 crypto work. There is no valuation deletion API and no permanent currency lock.
 
-Backup remains v1, with optional transfer/native currency fields. New exports
+Backup remains v1, with optional transfer/native currency fields as a transitional
+compatibility mechanism for this development branch. New exports
 include authoritative values; restore preserves them, including explicit null
 unresolved amounts. Only omitted legacy fields are inferred from the backup's
 accounts/settings using the migration rules. Files containing the extended v1
 fields must be restored with this or a newer Aurum build; older readers can
 ignore unknown fields. A versioned portability contract remains backup-v2 work.
 
-The native-currency migration uses settings row `id=1`, falling back to configured
-`AURUM_DEFAULT_CURRENCY` only when absent. Downgrade locks all relevant tables and
+The native-currency migration uses settings row `id=1`, falling back to its frozen
+local `USD` default only when absent, independently of runtime configuration.
+Downgrade locks all relevant tables and
 refuses authoritative destination amounts incompatible with the old schema
 (including cross-currency 1:1 amounts), native Budget/Goal currencies differing
 from legacy settings, or recurring snapshots differing from their accounts.

@@ -1,7 +1,10 @@
 """Persistence-step guarantees; transaction-writer locking is deferred to commit 5."""
 import asyncio
+import builtins
+import runpy
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from sqlalchemy import delete, insert, select, text
@@ -250,7 +253,7 @@ async def test_native_currency_migration_backfill_and_safe_downgrade(test_sessio
         migrate("upgrade", HEAD)
 
 
-async def test_migration_missing_settings_uses_configured_default(test_sessionmaker, account_id, categories, monkeypatch):
+async def test_migration_missing_settings_uses_frozen_default(test_sessionmaker, account_id, categories, monkeypatch):
     migrate("downgrade", PREVIOUS)
     try:
         await seed_legacy(test_sessionmaker, account_id, categories["Groceries"]["id"])
@@ -261,8 +264,8 @@ async def test_migration_missing_settings_uses_configured_default(test_sessionma
         migrate("upgrade", HEAD)
         await test_sessionmaker.kw["bind"].dispose()
         async with test_sessionmaker() as session:
-            assert (await session.execute(select(Budget.currency))).scalar_one() == "RUB"
-            assert (await session.execute(select(Goal.currency))).scalar_one() == "RUB"
+            assert (await session.execute(select(Budget.currency))).scalar_one() == "USD"
+            assert (await session.execute(select(Goal.currency))).scalar_one() == "USD"
         migrate("downgrade", PREVIOUS)
         migrate("upgrade", HEAD)
     finally:
@@ -348,3 +351,44 @@ async def test_legacy_backup_same_currency_backfill(client, account_id):
     recurring = restored["recurring_transactions"][0]
     assert recurring["amount_currency"] == recurring["transfer_amount_currency"] == "USD"
     assert Decimal(recurring["transfer_amount"]) == Decimal(recurring["amount"])
+
+
+async def test_migration_currency_helper_needs_no_runtime_imports(test_sessionmaker, monkeypatch):
+    original_import = builtins.__import__
+
+    def without_application_imports(name, *args, **kwargs):
+        if name == "app" or name.startswith("app."):
+            raise AssertionError(f"Historical migration imported runtime module: {name}")
+        return original_import(name, *args, **kwargs)
+
+    migration_path = Path(__file__).resolve().parents[1] / "alembic/versions/a72e9b4c106d_persist_native_currency_invariants.py"
+    async with test_sessionmaker() as session:
+        connection = await session.connection()
+        with monkeypatch.context() as isolated:
+            isolated.setattr(builtins, "__import__", without_application_imports)
+            migration = runpy.run_path(str(migration_path))
+            currency = migration["_legacy_currency"]
+            await session.execute(text("UPDATE app_settings SET currency='vnd' WHERE id=1"))
+            assert await connection.run_sync(currency) == "VND"
+            await session.execute(text("DELETE FROM app_settings WHERE id=1"))
+            assert await connection.run_sync(currency) == "USD"
+
+
+async def test_migration_invalid_existing_settings_fails_without_changes(test_sessionmaker, account_id, categories):
+    migrate("downgrade", PREVIOUS)
+    try:
+        await seed_legacy(test_sessionmaker, account_id, categories["Groceries"]["id"])
+        async with test_sessionmaker() as session:
+            await session.execute(text("UPDATE app_settings SET currency='ZZZ' WHERE id=1"))
+            await session.commit()
+        before = await database_snapshot(test_sessionmaker)
+        error = migrate("upgrade", HEAD, success=False)
+        assert "requires a valid legacy default currency" in error
+        assert await database_snapshot(test_sessionmaker) == before
+        async with test_sessionmaker() as session:
+            assert await session.scalar(text("SELECT currency FROM app_settings WHERE id=1")) == "ZZZ"
+    finally:
+        async with test_sessionmaker() as session:
+            await session.execute(text("UPDATE app_settings SET currency='VND' WHERE id=1"))
+            await session.commit()
+        migrate("upgrade", HEAD)

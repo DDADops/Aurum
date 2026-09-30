@@ -11,6 +11,8 @@ down_revision = "f83a2c91d607"
 branch_labels = None
 depends_on = None
 
+_LEGACY_DEFAULT_CURRENCY = "USD"
+
 # Frozen catalog at this revision; do not depend on future runtime catalogs.
 _CURRENCIES = (
     "AED AMD AUD AZN BRL BYN CAD CHF CNY CZK EUR GBP GEL HKD HUF IDR ILS INR "
@@ -19,12 +21,10 @@ _CURRENCIES = (
 
 
 def _legacy_currency(connection) -> str:
-    # Respect the singleton, not an arbitrary settings row. Configuration is
-    # consulted only when id=1 is absent, matching application startup seeding.
-    from app.core.config import get_settings
-
+    # Respect the singleton; freeze the authored default independently of
+    # future application configuration and the migration environment.
     currency = connection.execute(sa.text("SELECT currency FROM app_settings WHERE id=1")).scalar_one_or_none()
-    currency = currency if currency is not None else get_settings().default_currency
+    currency = currency if currency is not None else _LEGACY_DEFAULT_CURRENCY
     if not isinstance(currency, str) or currency.upper() not in _CURRENCIES:
         raise RuntimeError("Native currency migration requires a valid legacy default currency")
     return currency.upper()

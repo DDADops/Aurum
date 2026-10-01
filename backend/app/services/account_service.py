@@ -4,44 +4,19 @@ and credit destination amount in each account's native currency) rather than
 stored, the same "derive it, don't duplicate it" approach
 net_worth_service.py uses for Cash.
 """
-from collections import defaultdict
-from decimal import Decimal
-
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.currency import normalize_currency
 from app.models.account import Account
-from app.models.enums import TransactionType
-from app.models.transaction import Transaction
 from app.schemas.account import AccountCreate, AccountUpdate, AccountWithBalance
 from app.schemas.money import FinancialDataIssue
 from app.services.currency_history import account_has_history
+from app.services.native_balance_service import NativeBalance, account_balances
 
 
-async def _account_balances(session: AsyncSession) -> dict[int, Decimal | None]:
-    result = await session.execute(
-        select(Transaction.type, Transaction.amount, Transaction.account_id, Transaction.transfer_account_id, Transaction.transfer_amount)
-    )
-    balances: dict[int, Decimal] = defaultdict(Decimal)
-    unresolved: set[int] = set()
-    for tx_type, amount, account_id, transfer_account_id, transfer_amount in result.all():
-        if tx_type == TransactionType.INCOME:
-            balances[account_id] += amount
-        elif tx_type == TransactionType.EXPENSE:
-            balances[account_id] -= amount
-        elif tx_type == TransactionType.TRANSFER:
-            balances[account_id] -= amount
-            if transfer_account_id is not None:
-                if transfer_amount is None:
-                    unresolved.add(transfer_account_id)
-                else:
-                    balances[transfer_account_id] += transfer_amount
-    return {**balances, **dict.fromkeys(unresolved)}
-
-
-def _to_read(account: Account, balance: Decimal | None, has_history: bool) -> AccountWithBalance:
+def _to_read(account: Account, state: NativeBalance) -> AccountWithBalance:
     return AccountWithBalance(
         id=account.id,
         name=account.name,
@@ -49,10 +24,10 @@ def _to_read(account: Account, balance: Decimal | None, has_history: bool) -> Ac
         currency=account.currency,
         color=account.color,
         is_archived=account.is_archived,
-        balance=balance,
-        has_monetary_history=has_history,
-        complete=balance is not None,
-        data_issues=[] if balance is not None else [FinancialDataIssue(code="transfer_amount_unresolved")],
+        balance=state.balance,
+        has_monetary_history=state.has_monetary_history,
+        complete=state.balance is not None,
+        data_issues=[] if state.balance is not None else [FinancialDataIssue(code="transfer_amount_unresolved")],
     )
 
 
@@ -61,8 +36,8 @@ async def list_accounts(session: AsyncSession, include_archived: bool) -> list[A
     if not include_archived:
         stmt = stmt.where(Account.is_archived.is_(False))
     accounts = (await session.execute(stmt)).scalars().all()
-    balances = await _account_balances(session)
-    return [_to_read(account, balances.get(account.id, Decimal("0")), await account_has_history(session, account.id)) for account in accounts]
+    balances = await account_balances(session)
+    return [_to_read(account, balances.get(account.id, NativeBalance())) for account in accounts]
 
 
 async def create_account(session: AsyncSession, payload: AccountCreate) -> AccountWithBalance:
@@ -71,7 +46,7 @@ async def create_account(session: AsyncSession, payload: AccountCreate) -> Accou
     await session.commit()
     await session.refresh(account)
     # A brand-new account has no transactions yet — no need to query.
-    return _to_read(account, Decimal("0"), False)
+    return _to_read(account, NativeBalance())
 
 
 async def update_account(session: AsyncSession, account_id: int, payload: AccountUpdate) -> AccountWithBalance:
@@ -88,8 +63,9 @@ async def update_account(session: AsyncSession, account_id: int, payload: Accoun
         setattr(account, field, value)
     await session.commit()
     await session.refresh(account)
-    balances = await _account_balances(session)
-    return _to_read(account, balances.get(account.id, Decimal("0")), has_history)
+    balances = await account_balances(session)
+    state = balances.get(account.id, NativeBalance())
+    return _to_read(account, state)
 
 
 async def delete_account(session: AsyncSession, account_id: int) -> None:

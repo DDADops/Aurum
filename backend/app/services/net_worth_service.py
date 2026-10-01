@@ -23,10 +23,12 @@ from itertools import groupby
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.money import sum_money
 from app.models.account import Account
 from app.models.asset import Asset, AssetValuation
-from app.models.enums import AccountType, AssetClass, CapitalRole, RiskLevel, TransactionType
+from app.models.enums import AccountType, AssetClass, CapitalRole, RiskLevel
 from app.models.transaction import Transaction
+from app.schemas.money import FinancialDataIssue, FinancialDataStatus
 from app.schemas.net_worth import (
     CapitalRoleSummary,
     NetWorthBreakdownItem,
@@ -35,7 +37,8 @@ from app.schemas.net_worth import (
     RiskLevelItem,
     RiskLevelSummary,
 )
-from app.services.financial_data_service import capital_status
+from app.services.financial_data_service import capital_status, merge_statuses
+from app.services.native_balance_service import native_legs
 from app.services.settings_service import get_or_create_app_settings
 
 CASH_ACCOUNT_TYPES = {
@@ -81,7 +84,7 @@ _RISK_META: dict[RiskLevel, tuple[str, str]] = {
 }
 
 
-def _daily_series(events: list[tuple[date_, Decimal]], start: date_, end: date_) -> list[NetWorthPoint]:
+def _daily_series(events: list[tuple[date_, Decimal | None]], start: date_, end: date_) -> list[NetWorthPoint]:
     """Forward-fills a sparse, date-sorted list of cumulative totals into one
     point per calendar day. `events` before `start` still count — they just
     collapse into `start`'s opening value."""
@@ -94,35 +97,34 @@ def _daily_series(events: list[tuple[date_, Decimal]], start: date_, end: date_)
         while idx < n and events[idx][0] <= day:
             current = events[idx][1]
             idx += 1
-        points.append(NetWorthPoint(date=day, value=current))
+        points.append(NetWorthPoint(date=day, value=current, complete=current is not None))
         day += timedelta(days=1)
     return points
 
 
-async def _cash_cumulative_events(session: AsyncSession) -> list[tuple[date_, Decimal]]:
+async def _cash_cumulative_events(session: AsyncSession) -> list[tuple[date_, Decimal | None]]:
+    """Native legs only; capital_status gates mixed-currency totals until FX.
+
+    An unknown incoming credit makes cumulative events unknown from that day
+    onward, including when later known events occur. No partial subtotal escapes.
+    """
     accounts_result = await session.execute(select(Account.id, Account.type))
     cash_account_ids = {acc_id for acc_id, acc_type in accounts_result.all() if acc_type in CASH_ACCOUNT_TYPES}
-
-    txns_result = await session.execute(
-        select(Transaction.date, Transaction.type, Transaction.amount, Transaction.account_id, Transaction.transfer_account_id)
-    )
-
-    delta_by_date: dict[date_, Decimal] = defaultdict(Decimal)
-    for tx_date, tx_type, amount, account_id, transfer_account_id in txns_result.all():
-        if tx_type == TransactionType.INCOME and account_id in cash_account_ids:
-            delta_by_date[tx_date] += amount
-        elif tx_type == TransactionType.EXPENSE and account_id in cash_account_ids:
-            delta_by_date[tx_date] -= amount
-        elif tx_type == TransactionType.TRANSFER:
+    rows = await session.execute(select(
+        Transaction.date, Transaction.type, Transaction.amount, Transaction.account_id,
+        Transaction.transfer_account_id, Transaction.transfer_amount,
+    ))
+    delta_by_date: dict[date_, Decimal | None] = {}
+    for day, kind, amount, source, destination, transfer_amount in rows:
+        for account_id, delta in native_legs(kind, amount, source, destination, transfer_amount):
             if account_id in cash_account_ids:
-                delta_by_date[tx_date] -= amount
-            if transfer_account_id in cash_account_ids:
-                delta_by_date[tx_date] += amount
-
-    events: list[tuple[date_, Decimal]] = []
-    running = Decimal("0")
+                previous = delta_by_date.get(day, Decimal("0"))
+                delta_by_date[day] = None if previous is None or delta is None else sum_money((previous, delta))
+    events: list[tuple[date_, Decimal | None]] = []
+    running: Decimal | None = Decimal("0")
     for day in sorted(delta_by_date):
-        running += delta_by_date[day]
+        delta = delta_by_date[day]
+        running = None if running is None or delta is None else sum_money((running, delta))
         events.append((day, running))
     return events
 
@@ -236,7 +238,7 @@ async def _risk_level_summary(
     return summaries
 
 
-def _resolve_start_date(range_key: str, cash_events: list[tuple[date_, Decimal]], asset_events: list[tuple[date_, Decimal]], today: date_) -> date_:
+def _resolve_start_date(range_key: str, cash_events: list[tuple[date_, Decimal | None]], asset_events: list[tuple[date_, Decimal]], today: date_) -> date_:
     if range_key in RANGE_DAYS:
         return today - timedelta(days=RANGE_DAYS[range_key] - 1)
 
@@ -249,6 +251,10 @@ async def get_net_worth_summary(session: AsyncSession, range_key: str) -> NetWor
     currency = (await get_or_create_app_settings(session)).currency
     status = await capital_status(session, currency, account_types=CASH_ACCOUNT_TYPES)
     cash_events = await _cash_cumulative_events(session)
+    if any(value is None for _, value in cash_events):
+        status = merge_statuses(status, FinancialDataStatus(complete=False, data_issues=[
+            FinancialDataIssue(code="transfer_amount_unresolved"),
+        ]))
     asset_events, class_totals, current_by_asset = await _asset_events_and_class_totals(session)
     capital_roles = await _capital_role_summary(session, current_by_asset)
 
@@ -256,9 +262,6 @@ async def get_net_worth_summary(session: AsyncSession, range_key: str) -> NetWor
 
     cash_series = _daily_series(cash_events, start, today)
     asset_series = _daily_series(asset_events, start, today)
-    series = [
-        NetWorthPoint(date=c.date, value=c.value + a.value) for c, a in zip(cash_series, asset_series, strict=True)
-    ]
 
     if not status.complete:
         return NetWorthSummary(
@@ -267,9 +270,13 @@ async def get_net_worth_summary(session: AsyncSession, range_key: str) -> NetWor
             series=[NetWorthPoint(
                 date=p.date, value=None, complete=False, data_issues=status.data_issues,
                 missing_rates=[rate.model_copy(update={"requested_date": p.date}) for rate in status.missing_rates],
-            ) for p in series],
+            ) for p in cash_series],
             breakdown=[], capital_roles=[], risk_levels=[],
         )
+
+    series = [
+        NetWorthPoint(date=c.date, value=c.value + a.value) for c, a in zip(cash_series, asset_series, strict=True)
+    ]
 
     current = series[-1].value if series else Decimal("0")
     start_value = series[0].value if series else Decimal("0")

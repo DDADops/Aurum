@@ -130,13 +130,10 @@ The only balance adjustment is native Account crediting using `transfer_amount`;
 an unresolved incoming amount yields null balance with an issue, not zero or a
 partial total. Source debit remains known. No account conversion is implemented.
 
-Remaining balance readers: `net_worth_service._cash_cumulative_events` and
-`insights_service._idle_cash_account_count` still use old transfer arithmetic;
-`financial_data_service.capital_status` remains a conservative guard for them
-and now also suppresses unresolved same-currency amounts. Its cross-currency
-classification and reader arithmetic must be completed in the balance stage.
-FX, full Net Worth conversion, crypto metadata, recurring reconciliation,
+Native Account balance readers are now finalized; see the audit below. FX,
+full Net Worth conversion, crypto metadata, recurring reconciliation,
 backup v2 and frontend transfer input remain separate commits.
+
 
 ## Dated reference FX foundation
 
@@ -169,3 +166,54 @@ Aggregate conversion, sync/provider integration, frontend, recurring and crypto
 currency semantics are deferred. Backup v1 is unchanged: it excludes FX rows and
 fx_max_age_days. The dedicated backup-v2 commit must define their versioned
 export/restore semantics; v1 is not a portable snapshot of this new FX state.
+
+
+## Native Account balances and reader audit
+
+`native_balance_service.native_legs` defines source income +amount, expense and
+transfer -amount, and transfer destination +transfer_amount. A missing destination
+produces only the known source debit. A NULL destination amount makes only that
+existing account's balance unknown. `account_balances` shares this rule across
+Account and idle-cash readers, summing with precision 96; balance, latest activity
+and history derive from the same transaction query. Known zero is distinct from
+None, including after deletion of the final transaction. Account list/POST/PATCH
+expose native currency, balance, history and completeness; there is no individual
+GET endpoint. Archive inclusion rules are unchanged. Unknown balances expose one
+transfer_amount_unresolved issue, without a partial subtotal.
+
+Reader classification (backend-wide transfer/amount/balance search):
+
+- A, native: account_service and insights_service idle-cash now share the balance
+  helper. Idle cash uses destination amounts, preserves latest activity and
+  archive/type exclusions, and refuses unknown balances or history in a currency
+  different from the threshold's settings currency. The public whole-history
+  completeness guard suppresses those alerts; the local None result is also
+  guarded with idle_cash_balance_unavailable if reached. Empty known zero has
+  no historical currency input. FX threshold conversion/denomination is deferred.
+- B, aggregate: net_worth_service cash events use shared native legs and retain
+  None from the first unknown incoming event onward. capital_status restricts
+  unknown-credit issues to included destination accounts. A known cross-currency
+  credit is not an unresolved amount; currency mismatches still suppress mixed
+  totals. A missing destination does not invalidate an existing source balance.
+  Historical valuation, date scoping and conversion are deferred; the existing
+  conservative whole-history guard remains, including archived accounts.
+- B, aggregate: Dashboard transferred_out sums source amounts intentionally;
+  its metric-level currency guards remain. Cash Flow excludes transfers.
+  Reports/category_rollup, Budget and Advice consume income/expense amounts or
+  splits, never destination credits. Their base/native-budget FX aggregation
+  belongs to later commits. Existing Dashboard/Reports/Cash Flow/Advice guards
+  remain; Budget's previously deferred native-budget aggregation is not changed.
+- C, unrelated: transaction/recurring writers, schemas and models, history/FK
+  checks, backup v1 normalization, historical migrations and seed_mock_data are
+  not balance readers. Same-currency writer/backfill copying of amount into
+  transfer_amount is intentional; the mock seed bypasses normal writers and is
+  unchanged. No remaining native reader credits a destination with source amount.
+
+`test_native_balances.py` covers known/unknown/zero balances, both transfer sides,
+multiple incoming transfers, missing destination, archive/history/delete behavior,
+Account response consistency, cash events and account-type-scoped completeness,
+idle-cash threshold safety and Decimal context independence. FX isolation is
+checked both by forbidding provider/resolver/converter calls and by rejecting any
+fx_rates SQL during Account requests; persisted arbitrary rates leave balances
+unchanged. Native transfer writer and concurrency tests remain regression coverage.
+No migration, frontend change or reference FX integration is part of this stage.

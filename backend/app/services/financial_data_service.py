@@ -2,7 +2,7 @@
 
 These queries establish whether the existing arithmetic is safe, never resolve
 rates or reconstruct transfers. Missing observations use the approved 7-day
-policy for metadata only; no FX storage/settings migration exists yet.
+policy for metadata only; aggregate integration with the FX resolver is deferred.
 """
 from datetime import date
 
@@ -98,12 +98,11 @@ from escaping as valid current breakdowns. It is not a new balance engine.
         if kind == TransactionType.TRANSFER:
             if destination_used:
                 statuses.append(currency_status(dst_currency, currency, today))
-                if src_currency != dst_currency or transfer_amount is None:
+                if transfer_amount is None:
                     statuses.append(FinancialDataStatus(complete=False, data_issues=[
                         FinancialDataIssue(code="transfer_amount_unresolved")]))
-            elif source_used and dst_currency is None:
-                statuses.append(FinancialDataStatus(complete=False, data_issues=[
-                    FinancialDataIssue(code="transfer_destination_missing")]))
+            # Missing historical destination has no surviving balance to mark
+            # unknown. Transaction-level diagnostics still report it.
 
     assets = (await session.execute(select(
         Asset.currency, Asset.monthly_cash_flow,

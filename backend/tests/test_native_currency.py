@@ -250,7 +250,7 @@ async def test_native_currency_migration_backfill_and_safe_downgrade(test_sessio
                 await session.execute(text(f"UPDATE {table} SET {column}=:value WHERE id=:id"), {"value": original, "id": id_})
                 await session.commit()
     finally:
-        migrate("upgrade", HEAD)
+        migrate("upgrade", "head")
 
 
 async def test_migration_missing_settings_uses_frozen_default(test_sessionmaker, account_id, categories, monkeypatch):
@@ -269,7 +269,7 @@ async def test_migration_missing_settings_uses_frozen_default(test_sessionmaker,
         migrate("downgrade", PREVIOUS)
         migrate("upgrade", HEAD)
     finally:
-        migrate("upgrade", HEAD)
+        migrate("upgrade", "head")
 
 
 async def test_backup_v1_extension_preserves_authoritative_and_unresolved_fields(client, account_id, categories):
@@ -388,4 +388,4 @@ async def test_migration_invalid_existing_settings_fails_without_changes(test_se
         async with test_sessionmaker() as session:
             await session.execute(text("UPDATE app_settings SET currency='VND' WHERE id=1"))
             await session.commit()
-        migrate("upgrade", HEAD)
+        migrate("upgrade", "head")

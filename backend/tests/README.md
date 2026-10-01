@@ -137,3 +137,35 @@ and now also suppresses unresolved same-currency amounts. Its cross-currency
 classification and reader arithmetic must be completed in the balance stage.
 FX, full Net Worth conversion, crypto metadata, recurring reconciliation,
 backup v2 and frontend transfer input remain separate commits.
+
+## Dated reference FX foundation
+
+`test_fx.py` covers exact direct observations, upserts, PostgreSQL constraints,
+settings, historical lookup, semantic direct/inverse/bridge priority, independent
+leg freshness, deterministic bridge selection, missing reasons and Decimal-only
+conversion. Resolution permits at most two legs; it never fetches from a provider
+or materializes derived observations. The unique pair/date B-tree also supports
+backward date scans. Upsert replaces rate/source/fetched_at and leaves commit to
+the caller. Providers implement only the future explicit sync/backfill protocol.
+
+Stored observations are positive finite Numeric(38,18). Derived rates use 96
+significant digits (ROUND_HALF_EVEN), including repeating inverses, with no scale
+quantization. Final derived rates must remain within the positive storage range
+[1e-18, 99999999999999999999.999999999999999999]; out-of-range paths are unusable,
+never clamped. Intermediate legs are not range-clamped or money-rounded. Among
+representable bridges, minimum maximum leg age wins, then bridge code ascending.
+A fresh complete but unrepresentable route reports `precision_unrepresentable`;
+otherwise a complete historical route with stale legs reports `stale`; otherwise
+`absent`. Disconnected partial paths and future observations do not establish a
+historical route. Same-currency resolution needs neither observations nor SQL.
+
+Migration c4e8a91b720f follows a72e9b4c106d. Its roundtrip test explicitly expects
+observation loss on downgrade; settings backfill to 7 on upgrade/re-upgrade.
+Normal analytics/transaction GETs and reference resolution are tested with FX
+provider fetching and HTTP network transport forbidden. Reference FX does not
+supply execution transfer amounts or change the informational effective rate.
+
+Aggregate conversion, sync/provider integration, frontend, recurring and crypto
+currency semantics are deferred. Backup v1 is unchanged: it excludes FX rows and
+fx_max_age_days. The dedicated backup-v2 commit must define their versioned
+export/restore semantics; v1 is not a portable snapshot of this new FX state.

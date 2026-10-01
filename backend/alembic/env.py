@@ -17,6 +17,7 @@ from app.models import (  # noqa: F401 — registers metadata
     CryptoHolding,
     CryptoSyncState,
     CryptoTransaction,
+    FxRate,
     Goal,
     GoalContribution,
     RecurringTransaction,

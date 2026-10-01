@@ -10,6 +10,7 @@ from app.core.money import Money
 class AppSettingsRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    fx_max_age_days: int = Field(ge=0)
     currency: str
     negative_cash_flow_threshold_months: int
     net_worth_decline_threshold_months: int
@@ -31,6 +32,8 @@ class AppSettingsUpdate(BaseModel):
 
     # Normalize and validate against the shared supported-currency catalog.
     currency: CurrencyUpdate = None
+    # Omission is allowed; explicit null cannot clear the persisted setting.
+    fx_max_age_days: int = Field(default=7, ge=0)
     # Consecutive complete months before the corresponding alert fires.
     # Capped at 24 to match insights_service.py's MAX_LOOKBACK_MONTHS.
     negative_cash_flow_threshold_months: int | None = Field(default=None, ge=1, le=24)

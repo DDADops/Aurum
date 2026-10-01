@@ -58,6 +58,12 @@ class RiskLevelSummary(BaseModel):
 
 
 class NetWorthSummary(FinancialResponseStatus):
+    """Top-level status describes today; series and metric_status are independent.
+
+    Empty breakdown/roles/risk lists with incomplete metric_status are unavailable,
+    not zero allocations. Change metrics require both comparison endpoints.
+    """
+
     range: str
     current: Decimal | None
     change_amount: Decimal | None

@@ -17,8 +17,8 @@ though the two halves are updated at very different cadences.
 from collections import defaultdict
 from datetime import date as date_
 from datetime import timedelta
-from decimal import Decimal
-from itertools import groupby
+from decimal import Decimal, ROUND_HALF_EVEN, localcontext
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,9 +26,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.money import sum_money
 from app.models.account import Account
 from app.models.asset import Asset, AssetValuation
+from app.models.crypto import CryptoHolding
 from app.models.enums import AccountType, AssetClass, CapitalRole, RiskLevel
 from app.models.transaction import Transaction
-from app.schemas.money import FinancialDataIssue, FinancialDataStatus
+from app.schemas.money import FinancialDataIssue, FinancialDataStatus, MissingRate
 from app.schemas.net_worth import (
     CapitalRoleSummary,
     NetWorthBreakdownItem,
@@ -37,7 +38,8 @@ from app.schemas.net_worth import (
     RiskLevelItem,
     RiskLevelSummary,
 )
-from app.services.financial_data_service import capital_status, merge_statuses
+from app.services.financial_data_service import merge_statuses
+from app.services.fx_service import ResolvedRate, convert, resolve_rate
 from app.services.native_balance_service import native_legs
 from app.services.settings_service import get_or_create_app_settings
 
@@ -84,232 +86,211 @@ _RISK_META: dict[RiskLevel, tuple[str, str]] = {
 }
 
 
-def _daily_series(events: list[tuple[date_, Decimal | None]], start: date_, end: date_) -> list[NetWorthPoint]:
-    """Forward-fills a sparse, date-sorted list of cumulative totals into one
-    point per calendar day. `events` before `start` still count — they just
-    collapse into `start`'s opening value."""
-    events = sorted(events, key=lambda e: e[0])
-    points: list[NetWorthPoint] = []
-    idx, n = 0, len(events)
-    current = Decimal("0")
-    day = start
-    while day <= end:
-        while idx < n and events[idx][0] <= day:
-            current = events[idx][1]
-            idx += 1
-        points.append(NetWorthPoint(date=day, value=current, complete=current is not None))
-        day += timedelta(days=1)
-    return points
+def _issue(code: str) -> FinancialDataStatus:
+    return FinancialDataStatus(complete=False, data_issues=[FinancialDataIssue(code=code)])
 
 
-async def _cash_cumulative_events(session: AsyncSession) -> list[tuple[date_, Decimal | None]]:
-    """Native legs only; capital_status gates mixed-currency totals until FX.
+class _ReferenceValues:
+    """Request-local FX cache, including missing results. Never fetches providers."""
 
-    An unknown incoming credit makes cumulative events unknown from that day
-    onward, including when later known events occur. No partial subtotal escapes.
-    """
-    accounts_result = await session.execute(select(Account.id, Account.type))
-    cash_account_ids = {acc_id for acc_id, acc_type in accounts_result.all() if acc_type in CASH_ACCOUNT_TYPES}
-    rows = await session.execute(select(
+    def __init__(self, session: AsyncSession, currency: str, max_age_days: int):
+        self.session = session
+        self.currency = currency
+        self.max_age_days = max_age_days
+        self.rates: dict[tuple[str, str, date_, int], ResolvedRate | MissingRate] = {}
+
+    async def value(self, amount: Decimal, native: str, day: date_) -> tuple[Decimal | None, FinancialDataStatus]:
+        if amount == 0:
+            return Decimal("0"), FinancialDataStatus()
+        key = (native, self.currency, day, self.max_age_days)
+        if key not in self.rates:
+            self.rates[key] = await resolve_rate(self.session, *key)
+        rate = self.rates[key]
+        if isinstance(rate, MissingRate):
+            return None, FinancialDataStatus(complete=False, missing_rates=[rate])
+        return convert(amount, rate), FinancialDataStatus()
+
+
+async def _cash_cumulative_events(
+    session: AsyncSession, account_ids: set[int] | None = None, *, through: date_ | None = None,
+) -> dict[int, list[tuple[date_, Decimal | None]]]:
+    """Per-account native stocks, never a sum across account currencies."""
+    if account_ids is None:
+        account_ids = set((await session.scalars(select(Account.id).where(Account.type.in_(CASH_ACCOUNT_TYPES)))).all())
+    statement = select(
         Transaction.date, Transaction.type, Transaction.amount, Transaction.account_id,
         Transaction.transfer_account_id, Transaction.transfer_amount,
-    ))
-    delta_by_date: dict[date_, Decimal | None] = {}
-    for day, kind, amount, source, destination, transfer_amount in rows:
+    ).order_by(Transaction.date, Transaction.id)
+    if through is not None:
+        statement = statement.where(Transaction.date <= through)
+    events: dict[int, list[tuple[date_, Decimal | None]]] = defaultdict(list)
+    for day, kind, amount, source, destination, transfer_amount in await session.execute(statement):
         for account_id, delta in native_legs(kind, amount, source, destination, transfer_amount):
-            if account_id in cash_account_ids:
-                previous = delta_by_date.get(day, Decimal("0"))
-                delta_by_date[day] = None if previous is None or delta is None else sum_money((previous, delta))
-    events: list[tuple[date_, Decimal | None]] = []
-    running: Decimal | None = Decimal("0")
-    for day in sorted(delta_by_date):
-        delta = delta_by_date[day]
-        running = None if running is None or delta is None else sum_money((running, delta))
-        events.append((day, running))
-    return events
+            if account_id not in account_ids:
+                continue
+            previous = events[account_id][-1][1] if events[account_id] else Decimal("0")
+            balance = None if previous is None or delta is None else sum_money((previous, delta))
+            events[account_id].append((day, balance))
+    return dict(events)
 
 
-async def _asset_events_and_class_totals(
-    session: AsyncSession,
-) -> tuple[list[tuple[date_, Decimal]], dict[AssetClass, Decimal], dict[int, Decimal]]:
-    asset_class_result = await session.execute(select(Asset.id, Asset.asset_class))
-    asset_class_map = dict(asset_class_result.all())
+@dataclass
+class _History:
+    events: list[tuple[date_, Decimal | None]]
+    index: int = 0
+    value: Decimal | None = Decimal("0")
 
-    valuations_result = await session.execute(
-        select(AssetValuation.asset_id, AssetValuation.as_of_date, AssetValuation.value).order_by(
-            AssetValuation.as_of_date
-        )
-    )
-    rows = valuations_result.all()
-
-    current_by_asset: dict[int, Decimal] = {}
-    events: list[tuple[date_, Decimal]] = []
-    for day, group in groupby(rows, key=lambda row: row[1]):
-        for asset_id, _, value in group:
-            current_by_asset[asset_id] = value
-        events.append((day, sum(current_by_asset.values(), Decimal("0"))))
-
-    class_totals: dict[AssetClass, Decimal] = defaultdict(Decimal)
-    for asset_id, value in current_by_asset.items():
-        asset_class = asset_class_map.get(asset_id)
-        if asset_class is not None:
-            class_totals[asset_class] += value
-
-    return events, class_totals, current_by_asset
+    def at(self, day: date_) -> Decimal | None:
+        """Forward-fill native state as the chart advances in calendar order."""
+        while self.index < len(self.events) and self.events[self.index][0] <= day:
+            self.value = self.events[self.index][1]
+            self.index += 1
+        return self.value
 
 
-async def _capital_role_summary(session: AsyncSession, current_by_asset: dict[int, Decimal]) -> list[CapitalRoleSummary]:
-    """Cross-cuts the same assets by how the user tagged them (income /
-    neutral / drain) instead of by asset class — always all three roles,
-    even at zero, so the block reads as a fixed scale rather than a list
-    that shuffles as assets are added."""
-    roles_result = await session.execute(select(Asset.id, Asset.capital_role, Asset.monthly_cash_flow))
+def _percent(amount: Decimal, denominator: Decimal) -> float:
+    # All ratio arithmetic is Decimal. Only the existing percentage wire fields
+    # are floats; converted monetary amounts never pass through float.
+    with localcontext() as context:
+        context.prec = 96
+        context.rounding = ROUND_HALF_EVEN
+        return float(amount / denominator * Decimal("100")) if denominator != 0 else 0.0
 
-    totals_value: dict[CapitalRole, Decimal] = defaultdict(Decimal)
-    totals_flow: dict[CapitalRole, Decimal] = defaultdict(Decimal)
+
+def _breakdown(assets: list[Asset], values: dict[int, Decimal], cash: Decimal) -> list[NetWorthBreakdownItem]:
+    by_class: dict[str, Decimal] = {"cash": cash}
+    for asset in assets:
+        key = asset.asset_class.value
+        by_class[key] = sum_money((by_class.get(key, Decimal("0")), values[asset.id]))
+    total = sum_money(by_class.values())
+    return [NetWorthBreakdownItem(
+        key=key, name=name, color=color, icon=icon,
+        amount=by_class.get(key, Decimal("0")), percent=_percent(by_class.get(key, Decimal("0")), total),
+    ) for key, (name, color, icon) in _CLASS_META.items()]
+
+
+async def _capital_role_summary(
+    assets: list[Asset], values: dict[int, Decimal], fx: _ReferenceValues, today: date_,
+) -> tuple[list[CapitalRoleSummary], FinancialDataStatus]:
+    # Preserve the existing asset-only role scope; accounts have no capital role.
+    totals: dict[CapitalRole, Decimal] = defaultdict(Decimal)
+    flows: dict[CapitalRole, Decimal] = defaultdict(Decimal)
     counts: dict[CapitalRole, int] = defaultdict(int)
-    for asset_id, role, cash_flow in roles_result.all():
-        totals_value[role] += current_by_asset.get(asset_id, Decimal("0"))
-        totals_flow[role] += cash_flow or Decimal("0")
-        counts[role] += 1
-
-    return [
-        CapitalRoleSummary(
-            role=role.value,
-            label=_ROLE_META[role][0],
-            color=_ROLE_META[role][1],
-            total_value=totals_value.get(role, Decimal("0")),
-            monthly_cash_flow=totals_flow.get(role, Decimal("0")),
-            count=counts.get(role, 0),
-        )
-        for role in CapitalRole
-    ]
-
-
-async def _risk_level_summary(
-    session: AsyncSession, current_by_asset: dict[int, Decimal], cash_today: Decimal
-) -> list[RiskLevelSummary]:
-    """Cross-cuts Cash + assets by user-tagged risk of loss — unlike
-    capital_roles, Cash participates here: it's the zero-risk anchor an
-    80/20-style allocation rule ("80% of capital at zero risk, at most 20%
-    exposed") is measured against. Always all three tiers, even at zero,
-    same reasoning as capital_roles. Each tier's item list *is* its
-    diversification view — a tier that's one holding at 100% is
-    concentrated, several even-sized holdings aren't, no separate index."""
-    assets_result = await session.execute(select(Asset.id, Asset.name, Asset.risk_level))
-    asset_rows = assets_result.all()
-
-    totals: dict[RiskLevel, Decimal] = defaultdict(Decimal)
-    items_by_level: dict[RiskLevel, list[tuple[str, str, Decimal]]] = defaultdict(list)
-
-    if cash_today:
-        totals[RiskLevel.LOW] += cash_today
-        items_by_level[RiskLevel.LOW].append(("cash", _CLASS_META["cash"][0], cash_today))
-
-    for asset_id, name, risk_level in asset_rows:
-        value = current_by_asset.get(asset_id, Decimal("0"))
-        if value == 0:
-            continue
-        totals[risk_level] += value
-        items_by_level[risk_level].append((f"asset:{asset_id}", name, value))
-
-    grand_total = sum(totals.values(), Decimal("0"))
-
-    def _share(amount: Decimal, denominator: Decimal) -> float:
-        return float(amount / denominator * 100) if denominator else 0.0
-
-    summaries = []
-    for level in RiskLevel:
-        tier_total = totals.get(level, Decimal("0"))
-        items = [
-            RiskLevelItem(key=key, name=name, amount=amount, percent=_share(amount, tier_total))
-            for key, name, amount in sorted(items_by_level.get(level, []), key=lambda item: item[2], reverse=True)
-        ]
-        summaries.append(
-            RiskLevelSummary(
-                risk_level=level.value,
-                label=_RISK_META[level][0],
-                color=_RISK_META[level][1],
-                total_value=tier_total,
-                percent=_share(tier_total, grand_total),
-                items=items,
-            )
-        )
-    return summaries
+    statuses = []
+    for asset in assets:
+        totals[asset.capital_role] = sum_money((totals[asset.capital_role], values[asset.id]))
+        amount = asset.monthly_cash_flow if asset.monthly_cash_flow is not None else Decimal("0")
+        flow, status = await fx.value(amount, asset.currency, today)
+        statuses.append(status)
+        if flow is not None:
+            flows[asset.capital_role] = sum_money((flows[asset.capital_role], flow))
+        counts[asset.capital_role] += 1
+    status = merge_statuses(*statuses)
+    if not status.complete:
+        return [], status
+    return [CapitalRoleSummary(
+        role=role.value, label=_ROLE_META[role][0], color=_ROLE_META[role][1],
+        total_value=totals[role], monthly_cash_flow=flows[role], count=counts[role],
+    ) for role in CapitalRole], status
 
 
-def _resolve_start_date(range_key: str, cash_events: list[tuple[date_, Decimal | None]], asset_events: list[tuple[date_, Decimal]], today: date_) -> date_:
-    if range_key in RANGE_DAYS:
-        return today - timedelta(days=RANGE_DAYS[range_key] - 1)
-
-    all_dates = [e[0] for e in cash_events] + [e[0] for e in asset_events]
-    return min(all_dates) if all_dates else today
+def _risk_level_summary(assets: list[Asset], values: dict[int, Decimal], cash: Decimal) -> list[RiskLevelSummary]:
+    items: dict[RiskLevel, list[tuple[str, str, Decimal]]] = defaultdict(list)
+    if cash != 0:
+        items[RiskLevel.LOW].append(("cash", _CLASS_META["cash"][0], cash))
+    for asset in assets:
+        value = values[asset.id]
+        if value != 0:
+            items[asset.risk_level].append((f"asset:{asset.id}", asset.name, value))
+    totals = {level: sum_money(value for _, _, value in items[level]) for level in RiskLevel}
+    total = sum_money(totals.values())
+    return [RiskLevelSummary(
+        risk_level=level.value, label=_RISK_META[level][0], color=_RISK_META[level][1],
+        total_value=totals[level], percent=_percent(totals[level], total),
+        items=[RiskLevelItem(key=key, name=name, amount=value, percent=_percent(value, totals[level]))
+               for key, name, value in sorted(items[level], key=lambda item: item[2], reverse=True)],
+    ) for level in RiskLevel]
 
 
 async def get_net_worth_summary(session: AsyncSession, range_key: str) -> NetWorthSummary:
+    # Covers stock reconstruction, aggregation and endpoint subtraction even if
+    # a caller uses a smaller ambient Decimal precision. No monetary quantize.
+    with localcontext() as context:
+        context.prec = 96
+        context.rounding = ROUND_HALF_EVEN
+        return await _value_net_worth(session, range_key)
+
+
+async def _value_net_worth(session: AsyncSession, range_key: str) -> NetWorthSummary:
     today = date_.today()
-    currency = (await get_or_create_app_settings(session)).currency
-    status = await capital_status(session, currency, account_types=CASH_ACCOUNT_TYPES)
-    cash_events = await _cash_cumulative_events(session)
-    if any(value is None for _, value in cash_events):
-        status = merge_statuses(status, FinancialDataStatus(complete=False, data_issues=[
-            FinancialDataIssue(code="transfer_amount_unresolved"),
-        ]))
-    asset_events, class_totals, current_by_asset = await _asset_events_and_class_totals(session)
-    capital_roles = await _capital_role_summary(session, current_by_asset)
+    settings = await get_or_create_app_settings(session)
+    fx = _ReferenceValues(session, settings.currency, settings.fx_max_age_days)
+    # Archive inclusion and account-type scope are unchanged.
+    accounts = list((await session.scalars(select(Account).where(Account.type.in_(CASH_ACCOUNT_TYPES)))).all())
+    assets = list((await session.scalars(select(Asset).order_by(Asset.id))).all())
+    crypto_ids = set((await session.scalars(select(CryptoHolding.asset_id))).all())
+    cash_events = await _cash_cumulative_events(session, {account.id for account in accounts}, through=today)
+    valuations: dict[int, list[tuple[date_, Decimal | None]]] = defaultdict(list)
+    for asset_id, day, value in await session.execute(select(
+        AssetValuation.asset_id, AssetValuation.as_of_date, AssetValuation.value,
+    ).order_by(AssetValuation.as_of_date, AssetValuation.id)):
+        valuations[asset_id].append((day, value))
+    dates = [day for events in (*cash_events.values(), *valuations.values()) for day, _ in events if day <= today]
+    start = today - timedelta(days=RANGE_DAYS[range_key] - 1) if range_key in RANGE_DAYS else min(dates, default=today)
+    cash_history = {account.id: _History(cash_events.get(account.id, [])) for account in accounts}
+    asset_history = {asset.id: _History(valuations[asset.id]) for asset in assets}
+    series: list[NetWorthPoint] = []
+    day = start
+    while day <= today:
+        statuses = []
+        cash_values: list[Decimal] = []
+        asset_values: dict[int, Decimal] = {}
+        for account in accounts:
+            native = cash_history[account.id].at(day)
+            if native is None:
+                statuses.append(_issue("transfer_amount_unresolved"))
+                continue
+            value, status = await fx.value(native, account.currency, day)
+            statuses.append(status)
+            if value is not None:
+                cash_values.append(value)
+        for asset in assets:
+            # No history is unknown, as before. With a dated history, the asset
+            # enters the chart at its first valuation; earlier native value is 0.
+            if not valuations[asset.id]:
+                statuses.append(_issue("valuation_missing"))
+            if asset.id in crypto_ids:
+                # Legacy synced valuations lack historical quote provenance.
+                statuses.append(_issue("valuation_currency_unconfirmed"))
+                continue
+            if not valuations[asset.id]:
+                continue
+            native = asset_history[asset.id].at(day)
+            value, status = await fx.value(native, asset.currency, day)
+            statuses.append(status)
+            if value is not None:
+                asset_values[asset.id] = value
+        status = merge_statuses(*statuses)
+        cash = sum_money(cash_values)
+        value = sum_money((cash, *asset_values.values())) if status.complete else None
+        series.append(NetWorthPoint(date=day, value=value, **status.model_dump()))
+        day += timedelta(days=1)
 
-    start = _resolve_start_date(range_key, cash_events, asset_events, today)
-
-    cash_series = _daily_series(cash_events, start, today)
-    asset_series = _daily_series(asset_events, start, today)
-
-    if not status.complete:
-        return NetWorthSummary(
-            currency=currency, **status.model_dump(), range=range_key, current=None,
-            change_amount=None, change_percent=None,
-            series=[NetWorthPoint(
-                date=p.date, value=None, complete=False, data_issues=status.data_issues,
-                missing_rates=[rate.model_copy(update={"requested_date": p.date}) for rate in status.missing_rates],
-            ) for p in cash_series],
-            breakdown=[], capital_roles=[], risk_levels=[],
-        )
-
-    series = [
-        NetWorthPoint(date=c.date, value=c.value + a.value) for c, a in zip(cash_series, asset_series, strict=True)
-    ]
-
-    current = series[-1].value if series else Decimal("0")
-    start_value = series[0].value if series else Decimal("0")
-    change_amount = current - start_value
-    change_percent = float(change_amount / start_value * 100) if start_value else None
-
-    # cash_events entries are already cumulative — the last one *is* today's total.
-    cash_today = cash_events[-1][1] if cash_events else Decimal("0")
-    risk_levels = await _risk_level_summary(session, current_by_asset, cash_today)
-
-    total = cash_today + sum(class_totals.values(), Decimal("0"))
-
-    def _percent(amount: Decimal) -> float:
-        return float(amount / total * 100) if total else 0.0
-
-    breakdown = []
-    name, color, icon = _CLASS_META["cash"]
-    breakdown.append(NetWorthBreakdownItem(key="cash", name=name, color=color, icon=icon, amount=cash_today, percent=_percent(cash_today)))
-    for asset_class in AssetClass:
-        name, color, icon = _CLASS_META[asset_class.value]
-        amount = class_totals.get(asset_class, Decimal("0"))
-        breakdown.append(
-            NetWorthBreakdownItem(key=asset_class.value, name=name, color=color, icon=icon, amount=amount, percent=_percent(amount))
-        )
-
+    current = series[-1]
+    current_status = FinancialDataStatus(**current.model_dump(exclude={"date", "value"}))
+    start_status = FinancialDataStatus(**series[0].model_dump(exclude={"date", "value"}))
+    change_status = merge_statuses(start_status, current_status)
+    change = current.value - series[0].value if change_status.complete else None
+    change_percent = _percent(change, series[0].value) if change is not None and series[0].value != 0 else None
+    metrics = {"current": current_status, "change_amount": change_status, "change_percent": change_status,
+               "breakdown": current_status, "capital_roles": current_status, "risk_levels": current_status}
+    breakdown, roles, risk = [], [], []
+    if current.complete:
+        breakdown = _breakdown(assets, asset_values, cash)
+        roles, metrics["capital_roles"] = await _capital_role_summary(assets, asset_values, fx, today)
+        risk = _risk_level_summary(assets, asset_values, cash)
     return NetWorthSummary(
-        currency=currency,
-        range=range_key,
-        current=current,
-        change_amount=change_amount,
-        change_percent=change_percent,
-        series=series,
-        breakdown=breakdown,
-        capital_roles=capital_roles,
-        risk_levels=risk_levels,
+        currency=settings.currency, range=range_key, current=current.value, **current_status.model_dump(),
+        metric_status=metrics, change_amount=change, change_percent=change_percent,
+        series=series, breakdown=breakdown, capital_roles=roles, risk_levels=risk,
     )

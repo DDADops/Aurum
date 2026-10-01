@@ -78,9 +78,9 @@ async def capital_status(
 ) -> FinancialDataStatus:
     """Whole-history guard, deliberately conservative until dated valuation.
 
-An incompatible historical input suppresses the whole Net Worth response,
-including allocations. This also prevents the old code's future-event totals
-from escaping as valid current breakdowns. It is not a new balance engine.
+Used by pre-FX consumers such as Insights. Net Worth now resolves dated FX
+independently and does not call this whole-history gate. This is not a balance
+or valuation engine.
 """
     today = date.today()
     source, destination = aliased(Account), aliased(Account)

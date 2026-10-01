@@ -195,8 +195,9 @@ Reader classification (backend-wide transfer/amount/balance search):
   unknown-credit issues to included destination accounts. A known cross-currency
   credit is not an unresolved amount; currency mismatches still suppress mixed
   totals. A missing destination does not invalidate an existing source balance.
-  Historical valuation, date scoping and conversion are deferred; the existing
-  conservative whole-history guard remains, including archived accounts.
+  The subsequent Net Worth FX stage below replaces its whole-history gate with
+  dated valuation. Other consumers retain capital_status, including its archive
+  scope.
 - B, aggregate: Dashboard transferred_out sums source amounts intentionally;
   its metric-level currency guards remain. Cash Flow excludes transfers.
   Reports/category_rollup, Budget and Advice consume income/expense amounts or
@@ -217,3 +218,60 @@ checked both by forbidding provider/resolver/converter calls and by rejecting an
 fx_rates SQL during Account requests; persisted arbitrary rates leave balances
 unchanged. Native transfer writer and concurrency tests remain regression coverage.
 No migration, frontend change or reference FX integration is part of this stage.
+
+
+## Historical Net Worth through reference FX
+
+Net Worth alone now consumes dated reference FX. _cash_cumulative_events returns
+separate native cumulative histories by Account ID; it never combines currencies.
+For each calendar point, native_legs reconstructs each included account's stock
+through that date. Latest AssetValuation <= date is forward-filled in native
+currency. Each stock is then converted using that point's date, not transaction
+or original valuation date, and only converted amounts are summed. Future
+transactions/valuations cannot affect today. Cash account types and archived
+account inclusion are unchanged. Ranges 30d/90d/1y/5y/all remain; all starts at
+the first applicable cash/valuation event, or today if none exist.
+
+The Net-Worth-local FX cache keys source/target/date/max-age and caches failures
+as well as successes across accounts, assets and today's role cash flows. It
+uses resolve_rate/convert unchanged, with settings.fx_max_age_days. Exact native
+zero skips resolution. No persistent cache, provider call or FX write exists.
+At most one resolver call per nonzero currency/date is made within a request;
+large ranges still perform one local lookup per distinct currency/date.
+
+Each point has its own status. Unknown incoming transfer amounts invalidate the
+owning account only from the transfer date; missing/stale/unrepresentable FX
+invalidates only the affected valuation dates. No known subtotal is exposed.
+Summary complete/missing_rates/data_issues describe TODAY, while historical-only
+failures stay on points. Change metrics require complete first/final points and
+carry their combined status in metric_status; a known zero starting denominator
+retains the existing null change_percent without a data error.
+
+Breakdown and risk monetary values use converted current components; allocation
+percentages are computed from those values. Capital roles retain the asset-only
+scope and convert both asset values and their static monthly_cash_flow in native
+Asset.currency at today's FX. A missing flow-only rate suppresses capital_roles
+with its own metric_status, without invalidating a known current stock. An
+incomplete current stock suppresses breakdown/roles/risk rather than presenting
+partial allocations. Their existing non-null item schemas are unchanged.
+Monetary arithmetic uses Decimal with precision 96 and no quantization; existing
+percentage response fields remain float only at the serialization boundary.
+
+Assets with no valuation history retain valuation_missing. An asset with dated
+history enters the chart at its first valuation (earlier contribution zero),
+preserving the previous forward-fill semantics without using future values.
+CryptoHolding-backed valuations remain valuation_currency_unconfirmed because
+legacy quote provenance cannot be inferred; the crypto migration is deferred.
+Native history is reconstructed from surviving records, not an audit log.
+
+Net Worth no longer calls capital_status. Its pre-FX behavior for Insights is
+unchanged; no Dashboard/Cash Flow/Reports/Budget/Goal/crypto/recurring/backup or
+frontend conversion is included. No migration or converted-value persistence.
+
+`test_net_worth_fx.py` verifies stock revaluation without new transactions,
+point/current/change completeness, date bounds, weekend/staleness policy, zero
+components, reconciliation, assets and converted allocations/roles, base changes
+without native-data mutation, low ambient Decimal precision, request-cache query
+counts (including missing results), and GET isolation from provider/HTTP/FX writes.
+Native-balance internal-reader assertions now address per-account cash histories;
+the public native Account contract remains unchanged.

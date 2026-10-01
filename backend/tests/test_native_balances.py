@@ -161,7 +161,7 @@ async def test_cash_events_credit_native_amount_and_guard_mixed_totals(client, t
     source, destination = await account(client, "RUB", "credit_card"), await account(client, "VND")
     tx = await post(client, source, type="transfer", amount="10000", transfer_account_id=destination, transfer_amount="3000000")
     async with test_sessionmaker() as session:
-        assert (await _cash_cumulative_events(session))[-1][1] == Decimal("3000000")
+        assert (await _cash_cumulative_events(session))[destination][-1][1] == Decimal("3000000")
         status = await capital_status(session, "VND", account_types=CASH_ACCOUNT_TYPES)
         assert status.complete and not status.data_issues
     await client.patch("/settings", json={"currency": "VND"})
@@ -175,7 +175,7 @@ async def test_cash_events_credit_native_amount_and_guard_mixed_totals(client, t
     await unresolved(test_sessionmaker, tx)
     await post(client, destination, type="income", amount="100", date="2026-02-01")
     async with test_sessionmaker() as session:
-        assert [value for _, value in await _cash_cumulative_events(session)] == [None, None]
+        assert [value for _, value in (await _cash_cumulative_events(session))[destination]] == [None, None]
 
 
 async def test_unknown_non_cash_destination_does_not_invalidate_cash_source(client, test_sessionmaker):
@@ -185,7 +185,7 @@ async def test_unknown_non_cash_destination_does_not_invalidate_cash_source(clie
     async with test_sessionmaker() as session:
         assert (await capital_status(session, "USD", account_types=CASH_ACCOUNT_TYPES)).complete
         assert not (await capital_status(session, "USD")).complete
-        assert (await _cash_cumulative_events(session))[-1][1] == -10
+        assert (await _cash_cumulative_events(session))[source][-1][1] == -10
 
 
 async def test_idle_cash_native_credit_threshold_and_unknown(client, test_sessionmaker):

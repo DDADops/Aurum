@@ -369,3 +369,70 @@ The existing frontend guards top-level incompleteness before reading points;
 nullable point types and partial-series rendering await frontend integration.
 No migration or frontend changes. Reports, Budget, Goal, Recurring, Crypto,
 backup v2 and full Insights/Advice FX integration remain deferred.
+
+### Reports dated reference FX
+
+Reports exposes two endpoints only: category spending detail and category
+ranking by income/expense kind. There are no period comparisons, net/savings,
+stock metrics, account filters or embedded native transaction details.
+
+Field inventory and dependencies:
+
+| Output | Source and aggregation | Completeness |
+| --- | --- | --- |
+| detail series[].amount | Transaction.amount in Account.currency, FX on Transaction.date, selected category/split allocations grouped by month | Each month independently |
+| detail total_amount | Sum of converted monthly points | All selected contributions |
+| detail average_per_month | Converted total divided by number of series months, including empty months | Total must be complete |
+| ranking items[].amount and children[].amount | Dated converted category allocations, then parent/child rollup | Entire qualifying categorized set must be complete |
+| ranking total_amount | Sum of converted ranked categories | Same set as items |
+| ranking items[].percent | Converted item / converted total, Decimal ratio then existing float wire field | Same set as items |
+
+Amounts/totals are transaction flows; average and percentage are derived flows.
+Dates, category metadata and distinct transaction counts are non-monetary.
+Average retains the existing denominator but no longer quantizes to cents.
+Monetary arithmetic uses local precision 96; repeating inverse precision is
+inherited from the resolver, with no per-transaction/split/month quantization.
+
+The loader filters kind, inclusive dates and qualifying categories before FX.
+Parent detail includes children; child detail includes only that child. It
+converts the full transaction, allocates all stored splits in ID order with
+the same final residual as Dashboard, then selects report categories. Deleted
+category allocations participate in reconciliation but stay outside reports;
+uncategorized records are excluded, as before. Ranking uses the existing pure
+rollup_category_contributions helper, preserving descending amount/sort-order
+ties, child display rules and distinct transaction counts. Transfers are
+excluded; destination amounts and execution rates never enter reference FX.
+
+Detail preserves explicit bounds or derives missing bounds from selected
+transactions. Future transactions are included. Months are chronological and
+gaps are complete zeros; no selected records still means series=[], as before.
+CategorySpendingPoint minimally inherits FinancialDataStatus with nullable
+amount. Missing FX nulls only affected points, total and average. Response
+metric_status covers total_amount, average_per_month and series; known months
+remain present when series status is incomplete. Ranking uses items=[] with
+items/total_amount statuses incomplete instead of misleading partial shares.
+Income and expense requests stay independent. MissingRate reason/date/max-age/
+latest-date metadata is preserved and deduplicated without merging dates.
+
+Reports keeps a small local success/failure cache keyed by source/target/date/
+max-age and skips FX for exact zero. Extracting Dashboard/Cash Flow wrappers is
+deferred to avoid changing accepted consumers in this stage. The only direct
+backend callers are the routes. Frontend guards top-level incompleteness before
+reading series/items; nullable point types and partial-series rendering remain
+frontend work.
+
+Search audit: Reports sums only converted points/category rows. Native split
+amounts are safe same-transaction allocation inputs. There is no raw monetary
+sum, today/period-end FX, transfer_amount, NULL-to-zero fallback or mixed-native
+percentage in Reports/routes. category_rollup.py retains its old raw loader,
+now unused by application callers; removal is deferred, and Reports calls only
+the already-denominated rollup helper. No FX policy was added to that module.
+
+test_reports_fx.py verifies dated conversion, future-rate isolation, category
+shares/hierarchy, residual reconciliation, independent failure months, empty/
+zero/filter behavior, native-data-preserving base changes, low ambient context,
+cached successes/failures and request isolation. Provider/HTTP calls are
+forbidden and FX statements must be SELECT only. No migration, frontend change,
+persistent converted values or synchronization/backfill is introduced.
+Budget, Goal, Recurring, Crypto, backup v2 and full Insights/Advice FX remain
+separate work.

@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
-from app.schemas.money import FinancialResponseStatus
+from app.schemas.money import FinancialDataStatus, FinancialResponseStatus
 
 
 class CategoryRankingChildItem(BaseModel):
@@ -18,10 +18,10 @@ class CategoryRankingChildItem(BaseModel):
     amount: Decimal
 
 
-class CategorySpendingPoint(BaseModel):
+class CategorySpendingPoint(FinancialDataStatus):
     year: int
     month: int
-    amount: Decimal
+    amount: Decimal | None
 
 
 class CategorySpendingReport(FinancialResponseStatus):

@@ -1,141 +1,27 @@
-"""Long-range spending reports — the analysis the month-scoped Dashboard
-breakdown can't answer on its own: "how much did I spend on X this month,
-and how much in total over N years" (single-category detail), and "which
-categories cost the most over this whole period" (ranking, across all
-categories of one kind at once, not just the current month).
-"""
+"""Dated category flows: single-category monthly detail and category ranking."""
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date as date_
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.models.account import Account
 from app.models.category import Category
 from app.models.enums import CategoryKind, TransactionType
 from app.models.transaction import Transaction, TransactionSplit
+from app.schemas.money import FinancialDataStatus, MissingRate
 from app.schemas.reports import (
-    CategoryRankingChildItem,
-    CategoryRankingItem,
-    CategoryRankingReport,
-    CategorySpendingPoint,
-    CategorySpendingReport,
+    CategoryRankingChildItem, CategoryRankingItem, CategoryRankingReport,
+    CategorySpendingPoint, CategorySpendingReport,
 )
-from app.services.category_rollup import rollup_spending_by_top_level_category
+from app.services.category_rollup import rollup_category_contributions
+from app.services.financial_data_service import merge_statuses
+from app.services.fx_service import ResolvedRate, convert, resolve_rate
 from app.services.settings_service import get_or_create_app_settings
-from app.services.financial_data_service import transaction_status
-
-
-def _next_month(year: int, month: int) -> tuple[int, int]:
-    return (year + 1, 1) if month == 12 else (year, month + 1)
-
-
-async def get_category_spending_report(
-    session: AsyncSession, category_id: int, start_date: date_ | None, end_date: date_ | None
-) -> CategorySpendingReport:
-    currency = (await get_or_create_app_settings(session)).currency
-    category = await session.get(Category, category_id)
-    if category is None:
-        raise HTTPException(status_code=404, detail="Category not found")
-
-    # A top-level category's own report folds in its subcategories' spending
-    # too (same rollup as the Dashboard breakdown); a subcategory picked
-    # directly shows just its own transactions — there's nothing beneath it.
-    category_ids: list[int] = [category_id]
-    if category.parent_id is None:
-        child_ids = (
-            await session.execute(select(Category.id).where(Category.parent_id == category_id))
-        ).scalars().all()
-        category_ids.extend(child_ids)
-
-    # Plain transactions filed directly under one of these categories, plus
-    # split lines that assign part of a transaction to one of them — same
-    # two sources category_rollup.py unions for the Dashboard/ranking report.
-    plain_stmt = select(Transaction.id, Transaction.date, Transaction.amount).where(
-        Transaction.category_id.in_(category_ids)
-    )
-    split_stmt = (
-        select(TransactionSplit.transaction_id, Transaction.date, TransactionSplit.amount)
-        .join(Transaction, Transaction.id == TransactionSplit.transaction_id)
-        .where(TransactionSplit.category_id.in_(category_ids))
-    )
-    if start_date:
-        plain_stmt = plain_stmt.where(Transaction.date >= start_date)
-        split_stmt = split_stmt.where(Transaction.date >= start_date)
-    if end_date:
-        plain_stmt = plain_stmt.where(Transaction.date <= end_date)
-        split_stmt = split_stmt.where(Transaction.date <= end_date)
-
-    plain_rows = (await session.execute(plain_stmt)).all()
-    split_rows = (await session.execute(split_stmt)).all()
-    contributions = [(r[0], r[1], r[2]) for r in plain_rows] + [(r[0], r[1], r[2]) for r in split_rows]
-
-    empty = CategorySpendingReport(
-        currency=currency,
-        category_id=category.id,
-        category_name=category.name,
-        category_color=category.color,
-        category_icon=category.icon,
-        start_date=start_date,
-        end_date=end_date,
-        total_amount=Decimal("0"),
-        transaction_count=0,
-        average_per_month=Decimal("0"),
-        series=[],
-    )
-    if not contributions:
-        return empty
-
-    dates = [txn_date for _, txn_date, _ in contributions]
-    effective_start = start_date or min(dates)
-    effective_end = end_date or max(dates)
-
-    status = await transaction_status(
-        session, currency, start_date=start_date, end_date=end_date,
-        transaction_type=_KIND_TO_TRANSACTION_TYPE[category.kind],
-        category_ids=category_ids,
-    )
-    if not status.complete:
-        return CategorySpendingReport(
-            currency=currency, **status.model_dump(), category_id=category.id,
-            category_name=category.name, category_color=category.color, category_icon=category.icon,
-            start_date=effective_start, end_date=effective_end, total_amount=None,
-            transaction_count=len({row[0] for row in contributions}), average_per_month=None, series=[],
-        )
-
-    by_month: dict[tuple[int, int], Decimal] = defaultdict(Decimal)
-    for _, txn_date, amount in contributions:
-        by_month[(txn_date.year, txn_date.month)] += amount
-
-    total_amount = sum((amount for _, _, amount in contributions), Decimal("0"))
-    # Distinct transactions, not rows — a transaction split across two of
-    # these categories (e.g. parent + one of its children) must count once,
-    # the same as a plain transaction filed under just one of them.
-    total_count = len({transaction_id for transaction_id, _, _ in contributions})
-
-    series: list[CategorySpendingPoint] = []
-    year, month = effective_start.year, effective_start.month
-    while (year, month) <= (effective_end.year, effective_end.month):
-        series.append(CategorySpendingPoint(year=year, month=month, amount=by_month.get((year, month), Decimal("0"))))
-        year, month = _next_month(year, month)
-
-    months_count = len(series)
-    average_per_month = (total_amount / months_count).quantize(Decimal("0.01")) if months_count else Decimal("0")
-
-    return CategorySpendingReport(
-        currency=currency,
-        category_id=category.id,
-        category_name=category.name,
-        category_color=category.color,
-        category_icon=category.icon,
-        start_date=effective_start,
-        end_date=effective_end,
-        total_amount=total_amount,
-        transaction_count=total_count,
-        average_per_month=average_per_month,
-        series=series,
-    )
 
 
 _KIND_TO_TRANSACTION_TYPE = {
@@ -144,52 +30,163 @@ _KIND_TO_TRANSACTION_TYPE = {
 }
 
 
-async def get_category_ranking_report(
-    session: AsyncSession, kind: CategoryKind, start_date: date_ | None, end_date: date_ | None
-) -> CategoryRankingReport:
-    """All categories of one kind, ranked by total spent/earned over an
-    arbitrary period — "which category costs the most" across the whole
-    range, unlike the month-scoped Dashboard breakdown or the
-    single-category detail above."""
-    # A transaction's type already restricts it to categories of the
-    # matching kind (enforced at write time by _ensure_category_matches_type
-    # in routes/transactions.py), so filtering by transaction_type below is
-    # enough — no separate kind filter needed, and the shared rollup already
-    # unions plain transactions with split lines the same way the Dashboard
-    # breakdown does.
-    currency = (await get_or_create_app_settings(session)).currency
-    status = await transaction_status(
-        session, currency, start_date=start_date, end_date=end_date,
-        transaction_type=_KIND_TO_TRANSACTION_TYPE[kind], categorized_only=True)
-    if not status.complete:
-        return CategoryRankingReport(currency=currency, **status.model_dump(), start_date=start_date,
-                                     end_date=end_date, total_amount=None, items=[])
-    rows = await rollup_spending_by_top_level_category(
-        session, transaction_type=_KIND_TO_TRANSACTION_TYPE[kind], start_date=start_date, end_date=end_date
-    )
-    total_amount = sum((row.amount for row in rows), Decimal("0"))
+class _DatedValues:
+    """Request-local conversion cache, without report or category policy."""
 
-    def _percent(amount: Decimal) -> float:
-        return float(amount / total_amount * 100) if total_amount else 0.0
+    def __init__(self, session: AsyncSession, currency: str, max_age_days: int):
+        self.session, self.currency, self.max_age_days = session, currency, max_age_days
+        self.rates: dict[tuple[str, str, date_, int], ResolvedRate | MissingRate] = {}
 
-    items = [
-        CategoryRankingItem(
-            category_id=row.category_id,
-            name=row.name,
-            color=row.color,
-            icon=row.icon,
-            amount=row.amount,
-            percent=_percent(row.amount),
-            transaction_count=row.transaction_count,
-            children=[
-                CategoryRankingChildItem(
-                    category_id=child.category_id, name=child.name, color=child.color, icon=child.icon,
-                    amount=child.amount,
-                )
-                for child in row.children
-            ],
+    async def value(self, amount: Decimal, native: str, day: date_) -> tuple[Decimal | None, FinancialDataStatus]:
+        if amount == 0:
+            return Decimal("0"), FinancialDataStatus()
+        key = (native, self.currency, day, self.max_age_days)
+        if key not in self.rates:
+            self.rates[key] = await resolve_rate(self.session, *key)
+        rate = self.rates[key]
+        if isinstance(rate, MissingRate):
+            return None, FinancialDataStatus(complete=False, missing_rates=[rate])
+        return convert(amount, rate), FinancialDataStatus()
+
+
+@dataclass
+class _Contribution:
+    transaction_id: int
+    category_id: int
+    day: date_
+    amount: Decimal | None
+    status: FinancialDataStatus
+
+
+async def _category_contributions(
+    session: AsyncSession, fx: _DatedValues, kind: CategoryKind,
+    start_date: date_ | None, end_date: date_ | None, category_ids: set[int] | None = None,
+) -> list[_Contribution]:
+    """Select only qualifying transactions, convert, allocate, then filter leaves."""
+    plain = Transaction.category_id.is_not(None) if category_ids is None else Transaction.category_id.in_(category_ids)
+    split = TransactionSplit.category_id.is_not(None) if category_ids is None else TransactionSplit.category_id.in_(category_ids)
+    stmt = select(Transaction, Account.currency).join(Account, Account.id == Transaction.account_id).where(
+        Transaction.type == _KIND_TO_TRANSACTION_TYPE[kind], or_(plain, Transaction.splits.any(split)),
+    ).options(selectinload(Transaction.splits)).order_by(Transaction.date, Transaction.id)
+    if start_date is not None:
+        stmt = stmt.where(Transaction.date >= start_date)
+    if end_date is not None:
+        stmt = stmt.where(Transaction.date <= end_date)
+    contributions = []
+    for transaction, native in (await session.execute(stmt)).all():
+        value, status = await fx.value(transaction.amount, native, transaction.date)
+        allocations = []
+        if transaction.splits:
+            allocated = Decimal("0")
+            for index, part in enumerate(transaction.splits):
+                if value is None:
+                    amount = None
+                elif index == len(transaction.splits) - 1:
+                    # Match Dashboard: final stored split receives the precision
+                    # residual, including when its category has been deleted.
+                    amount = value - allocated
+                else:
+                    amount, _ = await fx.value(part.amount, native, transaction.date)
+                    allocated += amount
+                allocations.append((part.category_id, amount))
+        else:
+            allocations.append((transaction.category_id, value))
+        for category_id, amount in allocations:
+            if category_id is not None and (category_ids is None or category_id in category_ids):
+                contributions.append(_Contribution(transaction.id, category_id, transaction.date, amount, status))
+    return contributions
+
+
+async def get_category_spending_report(
+    session: AsyncSession, category_id: int, start_date: date_ | None, end_date: date_ | None,
+) -> CategorySpendingReport:
+    with localcontext() as context:
+        context.prec = 96
+        context.rounding = ROUND_HALF_EVEN
+        return await _category_spending(session, category_id, start_date, end_date)
+
+
+async def _category_spending(
+    session: AsyncSession, category_id: int, start_date: date_ | None, end_date: date_ | None,
+) -> CategorySpendingReport:
+    settings = await get_or_create_app_settings(session)
+    category = await session.get(Category, category_id)
+    if category is None:
+        raise HTTPException(status_code=404, detail="Category not found")
+    category_ids = {category_id}
+    if category.parent_id is None:
+        category_ids.update((await session.scalars(select(Category.id).where(Category.parent_id == category_id))).all())
+    fx = _DatedValues(session, settings.currency, settings.fx_max_age_days)
+    contributions = await _category_contributions(session, fx, category.kind, start_date, end_date, category_ids)
+    common = dict(currency=settings.currency, category_id=category.id, category_name=category.name,
+                  category_color=category.color, category_icon=category.icon)
+    status = merge_statuses(*(c.status for c in contributions))
+    statuses = {name: status for name in ("total_amount", "average_per_month", "series")}
+    if not contributions:
+        # Preserve the existing empty-report contract, even with explicit bounds.
+        return CategorySpendingReport(
+            **common, start_date=start_date, end_date=end_date, total_amount=Decimal("0"),
+            transaction_count=0, average_per_month=Decimal("0"), series=[], metric_status=statuses,
         )
-        for row in rows
-    ]
+    effective_start = start_date or min(c.day for c in contributions)
+    effective_end = end_date or max(c.day for c in contributions)
+    by_month: dict[tuple[int, int], Decimal] = defaultdict(Decimal)
+    inputs: dict[tuple[int, int], list[FinancialDataStatus]] = defaultdict(list)
+    for contribution in contributions:
+        key = contribution.day.year, contribution.day.month
+        inputs[key].append(contribution.status)
+        if contribution.amount is not None:
+            by_month[key] += contribution.amount
+    series = []
+    year, month = effective_start.year, effective_start.month
+    while (year, month) <= (effective_end.year, effective_end.month):
+        point_status = merge_statuses(*inputs[(year, month)])
+        series.append(CategorySpendingPoint(
+            year=year, month=month, amount=by_month[(year, month)] if point_status.complete else None,
+            **point_status.model_dump(),
+        ))
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    total = sum((point.amount for point in series), Decimal("0")) if status.complete else None
+    average = total / len(series) if total is not None and series else total
+    return CategorySpendingReport(
+        **common, **status.model_dump(), metric_status=statuses,
+        start_date=effective_start, end_date=effective_end, total_amount=total,
+        transaction_count=len({c.transaction_id for c in contributions}), average_per_month=average, series=series,
+    )
 
-    return CategoryRankingReport(currency=currency, start_date=start_date, end_date=end_date, total_amount=total_amount, items=items)
+
+async def get_category_ranking_report(
+    session: AsyncSession, kind: CategoryKind, start_date: date_ | None, end_date: date_ | None,
+) -> CategoryRankingReport:
+    with localcontext() as context:
+        context.prec = 96
+        context.rounding = ROUND_HALF_EVEN
+        return await _category_ranking(session, kind, start_date, end_date)
+
+
+async def _category_ranking(
+    session: AsyncSession, kind: CategoryKind, start_date: date_ | None, end_date: date_ | None,
+) -> CategoryRankingReport:
+    settings = await get_or_create_app_settings(session)
+    fx = _DatedValues(session, settings.currency, settings.fx_max_age_days)
+    contributions = await _category_contributions(session, fx, kind, start_date, end_date)
+    status = merge_statuses(*(c.status for c in contributions))
+    statuses = {"total_amount": status, "items": status}
+    common = dict(currency=settings.currency, start_date=start_date, end_date=end_date,
+                  metric_status=statuses, **status.model_dump())
+    if not status.complete:
+        return CategoryRankingReport(**common, total_amount=None, items=[])
+    categories = {c.id: c for c in (await session.scalars(select(Category))).all()}
+    rows = rollup_category_contributions(
+        [(c.transaction_id, c.category_id, c.amount) for c in contributions], categories,
+    )
+    total = sum((row.amount for row in rows), Decimal("0"))
+    items = [CategoryRankingItem(
+        category_id=row.category_id, name=row.name, color=row.color, icon=row.icon,
+        amount=row.amount, percent=float(row.amount / total * 100) if total else 0.0,
+        transaction_count=row.transaction_count,
+        children=[CategoryRankingChildItem(
+            category_id=child.category_id, name=child.name, color=child.color, icon=child.icon, amount=child.amount,
+        ) for child in row.children],
+    ) for row in rows]
+    return CategoryRankingReport(**common, total_amount=total, items=items)

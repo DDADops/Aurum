@@ -111,6 +111,13 @@ async def rollup_spending_by_top_level_category(
 
     categories_by_id = {c.id: c for c in (await session.execute(select(Category))).scalars().all()}
 
+    return rollup_category_contributions(contributions, categories_by_id)
+
+
+def rollup_category_contributions(
+    contributions: list[tuple[int, int, Decimal]], categories_by_id: dict[int, Category],
+) -> list[CategoryRollupItem]:
+    """Group already denominated contributions; no currency or FX policy here."""
     amount_by_effective: dict[int, Decimal] = defaultdict(Decimal)
     txn_ids_by_effective: dict[int, set[int]] = defaultdict(set)
     # effective (top-level) category id -> {actual leaf category_id: amount}

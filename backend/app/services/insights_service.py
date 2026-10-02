@@ -42,13 +42,15 @@ def _previous_month(year: int, month: int) -> tuple[int, int]:
     return (year - 1, 12) if month == 1 else (year, month - 1)
 
 
-async def _negative_cash_flow_streak(session: AsyncSession) -> int:
+async def _negative_cash_flow_streak(session: AsyncSession) -> int | None:
     today = date.today()
     year, month = _previous_month(today.year, today.month)
 
     streak = 0
     for _ in range(MAX_LOOKBACK_MONTHS):
         summary = await get_dashboard_summary(session, year, month)
+        if summary.net is None or not summary.metric_status.get("net", summary).complete:
+            return None
         if summary.net >= 0:
             break
         streak += 1
@@ -116,7 +118,7 @@ async def get_financial_alerts(session: AsyncSession) -> AlertsResponse:
     alerts: list[FinancialAlert] = []
 
     cash_flow_streak = await _negative_cash_flow_streak(session)
-    if cash_flow_streak >= settings.negative_cash_flow_threshold_months:
+    if cash_flow_streak is not None and cash_flow_streak >= settings.negative_cash_flow_threshold_months:
         alerts.append(
             FinancialAlert(
                 key="negative_cash_flow_streak",

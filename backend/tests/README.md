@@ -275,3 +275,60 @@ without native-data mutation, low ambient Decimal precision, request-cache query
 counts (including missing results), and GET isolation from provider/HTTP/FX writes.
 Native-balance internal-reader assertions now address per-account cash histories;
 the public native Account contract remains unchanged.
+
+
+## Dashboard dated flow aggregation
+
+Dashboard consumes local reference FX independently of Net Worth. Monetary
+metric classification: real_income, spent and transferred_out are transaction
+flows (A); net is income minus expense (D); spending_by_category amounts/children
+are grouped expense flows (A), with shares derived from converted spent (D).
+There are no stock metrics (B), no backend trend/comparison series, and no
+transaction count metric. Year/month and category identity/style fields are
+non-monetary (C). The frontend savings-rate display derives from income/net (D).
+RecentTransactionsCard requests the separate transaction API and retains native
+amount/account.currency; Dashboard does not embed or rewrite transaction records.
+
+Each qualifying source amount is converted on Transaction.date before addition,
+using settings.currency and fx_max_age_days. Month boundaries remain inclusive
+first/last calendar dates, including any future-dated records within that month.
+Future FX observations never change an earlier flow. Transfers contribute only
+the source reference-valued transferred_out volume, never income/expense; there
+is no destination-volume metric. Execution rates/destination amounts are not FX.
+
+A small Dashboard-local cache stores both ResolvedRate and MissingRate by
+source/target/date/max-age. No private Net Worth helpers are imported. Zero skips
+FX lookup. Monetary operations use local precision 96 without quantization;
+repeating inverse rates retain the existing FX layer's finite precision. The
+last stored split receives the Decimal-context residual from the converted
+transaction total, preserving reconciliation without cents rounding. Null-category
+allocations remain excluded from category slices but included in spent, as before.
+Parent/child grouping, sorted top-eight slices and Other are unchanged. A pure
+rollup_category_contributions helper is shared with the old Reports loader;
+Reports FX behavior is deliberately unchanged.
+
+Income, expense and outgoing-volume statuses remain independent. Missing/stale/
+precision_unrepresentable results null only the affected metric. Net depends on
+income and expense; category distribution depends on complete expense (including
+uncategorized expense), and is empty/unavailable if incomplete. Top-level status
+merges all metric statuses, as before. Empty periods are complete known zeros.
+Dashboard no longer uses the pre-FX transaction_status gate; other consumers and
+financial_data_service are unchanged.
+
+Direct-caller safety: Insights returns an unknown negative-flow streak and
+suppresses that alert when Dashboard net is unavailable; Advice suppresses its
+savings-rate comparison when either period lacks income/net. Their existing
+pre-FX public guards remain. Advice raw category-expense sums and Budget-based
+alerts are intentionally deferred, not newly enabled for mixed currencies.
+Remaining sums in Dashboard are converted flows/categories; Insights sums risk
+percentages and over-budget counts (non-monetary). No destination-credit/source
+amount substitution or NULL-to-zero fallback remains in Dashboard/caller handling.
+
+`test_dashboard_fx.py` covers dated 100000 RUB flows at USD/RUB 100 and 80 =>
+2250 USD, future-rate isolation, category/split conversion, independent failures,
+transfer semantics, zero legacy input, native-data-preserving base changes,
+low ambient precision, caller suppression and request-cache query counts.
+Provider/HTTP transport calls and FX writes are forbidden during tested GETs.
+No migration, frontend change, persistent conversion or sync/backfill is added.
+Cash Flow, Reports, Budget, Goal, Recurring, Crypto, backup v2 and full
+Insights/Advice currency semantics remain separate work.

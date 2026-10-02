@@ -1,17 +1,22 @@
 """Aggregation logic behind the Overview dashboard."""
 import calendar
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.models.account import Account
+from app.models.category import Category
 from app.models.enums import TransactionType
 from app.models.transaction import Transaction
 from app.schemas.dashboard import CategoryBreakdownChildItem, CategoryBreakdownItem, DashboardSummary
-from app.services.category_rollup import rollup_spending_by_top_level_category
+from app.schemas.money import FinancialDataStatus, MissingRate
+from app.services.category_rollup import rollup_category_contributions
+from app.services.financial_data_service import merge_statuses
+from app.services.fx_service import ResolvedRate, convert, resolve_rate
 from app.services.settings_service import get_or_create_app_settings
-from app.services.financial_data_service import transaction_status, merge_statuses
 
 # Categorical slots are capped at 8 (dataviz skill: a 9th series folds into "Other",
 # never a generated hue) — this is also the exact size of the default category set.
@@ -24,37 +29,77 @@ def _month_bounds(year: int, month: int) -> tuple[date, date]:
     return date(year, month, 1), date(year, month, last_day)
 
 
+class _FlowValues:
+    """Small request-local conversion cache; no stock or aggregation policy."""
+
+    def __init__(self, session: AsyncSession, currency: str, max_age_days: int):
+        self.session, self.currency, self.max_age_days = session, currency, max_age_days
+        self.rates: dict[tuple[str, str, date, int], ResolvedRate | MissingRate] = {}
+
+    async def value(self, amount: Decimal, native: str, day: date) -> tuple[Decimal | None, FinancialDataStatus]:
+        if amount == 0:
+            return Decimal("0"), FinancialDataStatus()
+        key = (native, self.currency, day, self.max_age_days)
+        if key not in self.rates:
+            self.rates[key] = await resolve_rate(self.session, *key)
+        rate = self.rates[key]
+        if isinstance(rate, MissingRate):
+            return None, FinancialDataStatus(complete=False, missing_rates=[rate])
+        return convert(amount, rate), FinancialDataStatus()
+
+
 async def get_dashboard_summary(session: AsyncSession, year: int, month: int) -> DashboardSummary:
+    with localcontext() as context:
+        context.prec = 96
+        context.rounding = ROUND_HALF_EVEN
+        return await _dated_summary(session, year, month)
+
+
+async def _dated_summary(session: AsyncSession, year: int, month: int) -> DashboardSummary:
     start, end = _month_bounds(year, month)
-    currency = (await get_or_create_app_settings(session)).currency
-    statuses = {}
-    for metric, kind in (("real_income", TransactionType.INCOME), ("spent", TransactionType.EXPENSE),
-                         ("transferred_out", TransactionType.TRANSFER)):
-        statuses[metric] = await transaction_status(
-            session, currency, start_date=start, end_date=end, transaction_type=kind)
+    settings = await get_or_create_app_settings(session)
+    fx = _FlowValues(session, settings.currency, settings.fx_max_age_days)
+    metric_for = {TransactionType.INCOME: "real_income", TransactionType.EXPENSE: "spent",
+                  TransactionType.TRANSFER: "transferred_out"}
+    inputs: dict[str, list[FinancialDataStatus]] = {name: [] for name in metric_for.values()}
+    totals = {name: Decimal("0") for name in metric_for.values()}
+    contributions: list[tuple[int, int, Decimal]] = []
+    transactions = (await session.execute(
+        select(Transaction, Account.currency).join(Account, Account.id == Transaction.account_id)
+        .where(Transaction.date >= start, Transaction.date <= end)
+        .options(selectinload(Transaction.splits)).order_by(Transaction.id)
+    )).all()
+    for transaction, native in transactions:
+        metric = metric_for[transaction.type]
+        value, status = await fx.value(transaction.amount, native, transaction.date)
+        inputs[metric].append(status)
+        if value is None:
+            continue  # incomplete metrics are suppressed below, never partial totals
+        totals[metric] += value
+        if transaction.type != TransactionType.EXPENSE:
+            continue
+        if transaction.splits:
+            allocated = Decimal("0")
+            for index, split in enumerate(transaction.splits):
+                if index == len(transaction.splits) - 1:
+                    # Reconcile the final Decimal-context residual deterministically
+                    # to the last stored split. No cents or money-scale rounding.
+                    converted = value - allocated
+                else:
+                    converted, _ = await fx.value(split.amount, native, transaction.date)
+                    allocated += converted
+                if split.category_id is not None:
+                    contributions.append((transaction.id, split.category_id, converted))
+        elif transaction.category_id is not None:
+            contributions.append((transaction.id, transaction.category_id, value))
+
+    statuses = {name: merge_statuses(*states) for name, states in inputs.items()}
     statuses["net"] = merge_statuses(statuses["real_income"], statuses["spent"])
     statuses["spending_by_category"] = statuses["spent"]
     status = merge_statuses(*statuses.values())
-
-    totals_stmt = (
-        select(Transaction.type, func.coalesce(func.sum(Transaction.amount), 0))
-        .where(Transaction.date >= start, Transaction.date <= end)
-        .group_by(Transaction.type)
-    )
-    totals_result = await session.execute(totals_stmt)
-    totals: dict[TransactionType, Decimal] = {row[0]: row[1] for row in totals_result.all()}
-
-    real_income = totals.get(TransactionType.INCOME, Decimal("0"))
-    spent = totals.get(TransactionType.EXPENSE, Decimal("0"))
-    transferred_out = totals.get(TransactionType.TRANSFER, Decimal("0"))
-
-    # A subcategory's spending rolls up into its parent's slice, and a split
-    # transaction's category_id=NULL means its category lives on its split
-    # lines instead — rollup_spending_by_top_level_category handles both
-    # the same way a plain transaction's category already was.
-    rows = await rollup_spending_by_top_level_category(
-        session, transaction_type=TransactionType.EXPENSE, start_date=start, end_date=end
-    )
+    real_income, spent, transferred_out = (totals[name] for name in ("real_income", "spent", "transferred_out"))
+    categories = {c.id: c for c in (await session.scalars(select(Category))).all()}
+    rows = rollup_category_contributions(contributions, categories) if statuses["spent"].complete else []
 
     top_rows, rest_rows = rows[:MAX_CHART_SLICES], rows[MAX_CHART_SLICES:]
 
@@ -86,7 +131,7 @@ async def get_dashboard_summary(session: AsyncSession, year: int, month: int) ->
         )
 
     return DashboardSummary(
-        currency=currency, metric_status=statuses, **status.model_dump(),
+        currency=settings.currency, metric_status=statuses, **status.model_dump(),
         year=year,
         month=month,
         real_income=real_income if statuses["real_income"].complete else None,

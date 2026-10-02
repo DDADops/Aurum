@@ -124,6 +124,13 @@ async def _savings_rate_trend_advice(session: AsyncSession, year: int, month: in
     prev_year, prev_month = _previous_month(year, month)
     previous = await get_dashboard_summary(session, prev_year, prev_month)
 
+    if any(
+        item.real_income is None or item.net is None
+        or not item.metric_status.get("real_income", item).complete
+        or not item.metric_status.get("net", item).complete
+        for item in (current, previous)
+    ):
+        return None
     if current.real_income <= 0 or previous.real_income <= 0:
         return None
 

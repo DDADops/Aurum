@@ -1,17 +1,20 @@
 from datetime import date as date_
 from decimal import Decimal
 
-from pydantic import BaseModel
+from pydantic import Field
 
-from app.schemas.money import FinancialResponseStatus
+from app.schemas.money import FinancialDataStatus, FinancialResponseStatus
 
 
-class CashFlowPoint(BaseModel):
+class CashFlowPoint(FinancialDataStatus):
+    """Independent month and income/expense/net completeness."""
+
+    metric_status: dict[str, FinancialDataStatus] = Field(default_factory=dict)
     year: int
     month: int
-    income: Decimal
-    expense: Decimal
-    net: Decimal
+    income: Decimal | None
+    expense: Decimal | None
+    net: Decimal | None
 
 
 class CashFlowResponse(FinancialResponseStatus):

@@ -332,3 +332,40 @@ Provider/HTTP transport calls and FX writes are forbidden during tested GETs.
 No migration, frontend change, persistent conversion or sync/backfill is added.
 Cash Flow, Reports, Budget, Goal, Recurring, Crypto, backup v2 and full
 Insights/Advice currency semantics remain separate work.
+
+### Cash Flow dated reference FX
+
+`test_cash_flow_fx.py` covers transaction-date conversion before monthly grouping.
+Income/expense and their totals are flows; net and total_net are derived flows;
+dates/year/month are non-monetary. There are no stock metrics or embedded native
+transaction details. Inclusive ranges, fallback bounds, future transactions,
+chronological months and empty buckets retain their existing semantics.
+
+Each source Transaction.amount uses Account.currency and Transaction.date with
+the existing resolver/convert functions, settings.currency and fx_max_age_days.
+Totals sum the same converted bucket metrics. Decimal precision is 96 without
+quantization, including the resolver's finite repeating inverse precision.
+Transfers are excluded from both bounds and contributions; transfer_amount and
+execution rates never enter the report. Exact zero skips FX.
+
+Each point exposes FinancialDataStatus and income/expense/net metric_status;
+response metric_status contains total_income/total_expense/total_net. Missing,
+stale or precision_unrepresentable FX nulls only dependent metrics and totals,
+never exposes partial totals, and preserves other months and known metrics.
+Top-level status merges total statuses. Empty buckets are complete zeros.
+Missing metadata is deduplicated without collapsing different requested dates.
+
+A small Cash-Flow-local cache stores successes and failures by source/target/
+date/max-age for one request. Shared-helper extraction is deferred to avoid
+changing Dashboard or importing private helpers. Tests verify dated rates,
+range boundaries, independent failures, low ambient precision, cache query
+counts, base-currency recomputation and unchanged account/transaction/FX rows.
+Provider and HTTP calls are forbidden, and FX statements must be SELECT only.
+
+Search audit: the only direct backend caller is the route. No raw monetary sum,
+today/bucket FX date, transfer amount or NULL-to-zero fallback remains in this
+path; sums consume converted points, and SQL min/max only computes date bounds.
+The existing frontend guards top-level incompleteness before reading points;
+nullable point types and partial-series rendering await frontend integration.
+No migration or frontend changes. Reports, Budget, Goal, Recurring, Crypto,
+backup v2 and full Insights/Advice FX integration remain deferred.

@@ -151,6 +151,9 @@ async def get_financial_alerts(session: AsyncSession) -> AlertsResponse:
 
     today = date.today()
     budget_status = await get_budget_status(session, today.year, today.month)
+    if not budget_status.complete:
+        # A missing budget-target rate must not become a definitive zero count.
+        return AlertsResponse(currency=settings.currency, **merge_statuses(budget_status).model_dump(), alerts=[])
     over_budget_count = sum(1 for item in budget_status.items if item.is_over_budget)
     if over_budget_count > 0:
         alerts.append(

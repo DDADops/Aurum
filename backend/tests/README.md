@@ -436,3 +436,76 @@ forbidden and FX statements must be SELECT only. No migration, frontend change,
 persistent converted values or synchronization/backfill is introduced.
 Budget, Goal, Recurring, Crypto, backup v2 and full Insights/Advice FX remain
 separate work.
+
+### Budget-native spending through dated FX
+
+Budget.currency already exists as VARCHAR(3) NOT NULL with no model/server
+default. Migration a72e9b4c106d snapshots AppSettings(id=1).currency, validated
+and uppercased against its frozen catalog, or frozen USD when absent. No legacy
+currency is rewritten by this stage. Create resolves omitted currency through
+effective_default_currency and persists it. Explicit currency uses CurrencyCode.
+PATCH still requires monthly_limit; optional explicit currency re-denominates
+that nominal number without conversion. Omission preserves currency, explicit
+null/unsupported currency fails validation. No locks or new migration added.
+
+| Field | Currency / persistence | Completeness dependency |
+| --- | --- | --- |
+| monthly_limit (CRUD/status) | Persisted Budget.currency nominal | Always known |
+| spent | Derived flow in Budget.currency | Every qualifying expense allocation |
+| remaining | Derived monthly_limit - spent, Budget.currency | Complete spent |
+| percent | Derived Decimal spent / limit * 100, float only at API boundary | Complete spent; existing zero-limit result is 0 |
+| is_over_budget | Derived spent > limit boolean | Complete spent |
+
+The budget remains one ongoing monthly limit per expense category, evaluated
+for the requested calendar year/month. Boundaries are inclusive first/last
+days, future transactions in that month remain included, and each month starts
+with zero consumption. Parent budgets include their children; child budgets
+still independently track the child's allocations. Empty months are known zero.
+
+Budget status selects relevant EXPENSE transactions before resolution. Each
+full Transaction.amount in Account.currency converts on Transaction.date
+directly into the relevant Budget.currency via existing resolve_rate/convert.
+All stored splits are then allocated in ID order, with the final split receiving
+the same precision residual as Dashboard/Reports. Category filtering follows
+allocation, so deleted/null shares are not redistributed. Income, transfers,
+unrelated/uncategorized records and out-of-period records do not consume budgets
+or require FX. No transfer_amount or execution-rate reference valuation.
+
+BudgetStatus inherits FinancialResponseStatus: each row has its own currency,
+complete/missing_rates/data_issues and metric_status. Spent, remaining, percent
+and is_over_budget are null when FX is absent/stale/precision_unrepresentable;
+monthly_limit stays known. BudgetStatusResponse inherits FinancialDataStatus,
+merging rows without assigning a false single currency to the collection.
+Complete rows survive other incomplete budgets. Resolver metadata retains
+source/target/date/max-age/latest-date; identical errors are deduplicated, dates
+and target currencies remain distinct.
+
+One Budget-local cache spans all rows, keyed by source/target/date/max-age and
+stores successes and MissingRate. Zero bypasses lookup. Settings supplies only
+fx_max_age_days to valuation, never its target. Display-currency changes leave
+nominal budget data and every progress value unchanged. Calculations run at
+precision 96 with no monetary quantization. Shared-wrapper extraction is
+deferred; existing Dashboard/Cash Flow/Reports wrappers are unchanged.
+
+Direct-consumer audit: Insights counts over-budget booleans only when the whole
+budget status is complete; otherwise its existing conservative alert contract
+returns incomplete with no alerts. No partial count or unknown-as-false result.
+Advice reads Budget.category_id only (non-monetary membership); its raw expense
+sums and broader FX integration remain deferred behind its existing guard.
+Budget production paths contain no raw expense/split SQL sums or comparison
+against a limit before conversion. Native part amounts are same-transaction
+allocation inputs; spent sums converted Budget.currency amounts; the Insights
+sum counts booleans, not money. CRUD/backup limits remain persisted nominals.
+
+test_budget_fx.py covers persistence, re-denomination, same/mixed currencies,
+dated 2250 USD example, non-app VND targets through direct/inverse/bridge routes,
+splits, independent budgets, missing metadata, max-age, period/type filters,
+base-setting invariance and native row snapshots, cache targets/dates/failures,
+zero/legacy zero limit, low ambient precision and direct Insights compatibility.
+Provider/HTTP calls are forbidden during GET/list; FX statements must be SELECT.
+
+Frontend is deliberately unchanged and NOT yet compatible with incomplete
+budget rows: BudgetList calls percent.toFixed without a null guard and formats
+values in the global currency. Per-budget currency labels and unknown-value UI
+must be added during the frontend stage before this is user-facing. No Goal,
+Recurring, Crypto, backup-v2 or full Insights/Advice FX work is included.

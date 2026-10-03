@@ -5,19 +5,23 @@ budget_exceeded proactive alert (services/insights_service.py)."""
 import calendar
 from collections import defaultdict
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.models.account import Account
 from app.models.budget import Budget
 from app.models.category import Category
 from app.models.enums import CategoryKind, TransactionType
 from app.models.transaction import Transaction, TransactionSplit
 from app.schemas.budget import BudgetCreate, BudgetStatus, BudgetStatusResponse, BudgetUpdate
-from app.services.settings_service import effective_default_currency
+from app.schemas.money import FinancialDataStatus, MissingRate
+from app.services.financial_data_service import merge_statuses
+from app.services.fx_service import ResolvedRate, convert, resolve_rate
+from app.services.settings_service import effective_default_currency, get_or_create_app_settings
 
 _EAGER = (selectinload(Budget.category),)
 
@@ -71,82 +75,99 @@ async def delete_budget(session: AsyncSession, budget_id: int) -> None:
     await session.commit()
 
 
-async def get_budget_status(session: AsyncSession, year: int, month: int) -> BudgetStatusResponse:
-    start, end = _month_bounds(year, month)
+class _DatedValues:
+    """One request cache shared by all budgets, including their target currencies."""
 
+    def __init__(self, session: AsyncSession, max_age_days: int):
+        self.session, self.max_age_days = session, max_age_days
+        self.rates: dict[tuple[str, str, date, int], ResolvedRate | MissingRate] = {}
+
+    async def value(
+        self, amount: Decimal, source: str, target: str, day: date,
+    ) -> tuple[Decimal | None, FinancialDataStatus]:
+        if amount == 0:
+            return Decimal("0"), FinancialDataStatus()
+        key = (source, target, day, self.max_age_days)
+        if key not in self.rates:
+            self.rates[key] = await resolve_rate(self.session, *key)
+        rate = self.rates[key]
+        if isinstance(rate, MissingRate):
+            return None, FinancialDataStatus(complete=False, missing_rates=[rate])
+        return convert(amount, rate), FinancialDataStatus()
+
+
+async def get_budget_status(session: AsyncSession, year: int, month: int) -> BudgetStatusResponse:
+    with localcontext() as context:
+        context.prec = 96
+        context.rounding = ROUND_HALF_EVEN
+        return await _dated_budget_status(session, year, month)
+
+
+async def _dated_budget_status(session: AsyncSession, year: int, month: int) -> BudgetStatusResponse:
+    start, end = _month_bounds(year, month)
     budgets = await list_budgets(session)
     if not budgets:
         return BudgetStatusResponse(year=year, month=month, items=[])
+    settings = await get_or_create_app_settings(session)
+    fx = _DatedValues(session, settings.fx_max_age_days)
 
-    # A budget on a top-level category covers its subcategories too — the
-    # same rollup the Dashboard breakdown and the category report already do
-    # (coalesce(parent_id, id) in dashboard_service/reports_service).
-    # Counting only exact category_id matches meant a month could read as 900
-    # spent on the Dashboard and 0 against its own budget. A subcategory that
-    # has a budget of its own still tracks its own spending: both bars move,
-    # each against its own limit.
-    budget_category_ids = [b.category_id for b in budgets]
-    children_by_parent: dict[int, list[int]] = defaultdict(list)
-    child_rows = await session.execute(
-        select(Category.id, Category.parent_id).where(Category.parent_id.in_(budget_category_ids))
-    )
-    for child_id, parent_id in child_rows.all():
-        children_by_parent[parent_id].append(child_id)
-
-    counted_ids = set(budget_category_ids).union(
-        child_id for children in children_by_parent.values() for child_id in children
-    )
-    # A split transaction has category_id=NULL on its own row — its spend
-    # lives on its split lines instead (see category_rollup.py), so a plain
-    # sum on Transaction.category_id alone would silently under-count a
-    # budget funded partly by split purchases.
-    plain_stmt = (
-        select(Transaction.category_id, func.coalesce(func.sum(Transaction.amount), 0))
-        .where(
-            Transaction.category_id.in_(counted_ids),
+    children_by_parent: dict[int, set[int]] = defaultdict(set)
+    for child_id, parent_id in (await session.execute(
+        select(Category.id, Category.parent_id).where(Category.parent_id.in_([b.category_id for b in budgets]))
+    )).all():
+        children_by_parent[parent_id].add(child_id)
+    categories_by_budget = {b.id: {b.category_id} | children_by_parent[b.category_id] for b in budgets}
+    counted_ids = set().union(*categories_by_budget.values())
+    transactions = (await session.execute(
+        select(Transaction, Account.currency).join(Account, Account.id == Transaction.account_id).where(
             Transaction.type == TransactionType.EXPENSE,
-            Transaction.date >= start,
-            Transaction.date <= end,
-        )
-        .group_by(Transaction.category_id)
-    )
-    split_stmt = (
-        select(TransactionSplit.category_id, func.coalesce(func.sum(TransactionSplit.amount), 0))
-        .join(Transaction, Transaction.id == TransactionSplit.transaction_id)
-        .where(
-            TransactionSplit.category_id.in_(counted_ids),
-            Transaction.type == TransactionType.EXPENSE,
-            Transaction.date >= start,
-            Transaction.date <= end,
-        )
-        .group_by(TransactionSplit.category_id)
-    )
-    spent_by_category: dict[int, Decimal] = defaultdict(Decimal)
-    for category_id, amount in (await session.execute(plain_stmt)).all():
-        spent_by_category[category_id] += amount
-    for category_id, amount in (await session.execute(split_stmt)).all():
-        spent_by_category[category_id] += amount
+            Transaction.date >= start, Transaction.date <= end,
+            or_(Transaction.category_id.in_(counted_ids),
+                Transaction.splits.any(TransactionSplit.category_id.in_(counted_ids))),
+        ).options(selectinload(Transaction.splits)).order_by(Transaction.date, Transaction.id)
+    )).all()
 
     items = []
     for budget in budgets:
-        spent = spent_by_category.get(budget.category_id, Decimal("0")) + sum(
-            (spent_by_category.get(child_id, Decimal("0")) for child_id in children_by_parent[budget.category_id]),
-            Decimal("0"),
-        )
-        percent = float(spent / budget.monthly_limit * 100) if budget.monthly_limit else 0.0
-        items.append(
-            BudgetStatus(
-                budget_id=budget.id,
-                category_id=budget.category_id,
-                category_name=budget.category.name,
-                category_color=budget.category.color,
-                category_icon=budget.category.icon,
-                monthly_limit=budget.monthly_limit,
-                spent=spent,
-                remaining=budget.monthly_limit - spent,
-                percent=percent,
-                is_over_budget=spent > budget.monthly_limit,
+        category_ids = categories_by_budget[budget.id]
+        spent = Decimal("0")
+        inputs = []
+        for transaction, native in transactions:
+            selected = (
+                any(part.category_id in category_ids for part in transaction.splits)
+                if transaction.splits else transaction.category_id in category_ids
             )
-        )
-
-    return BudgetStatusResponse(year=year, month=month, items=items)
+            if not selected:
+                continue
+            value, status = await fx.value(transaction.amount, native, budget.currency, transaction.date)
+            inputs.append(status)
+            if value is None:
+                continue  # Suppress the entire dependent metric below, not just this row.
+            if transaction.splits:
+                allocated = Decimal("0")
+                for index, part in enumerate(transaction.splits):
+                    if index == len(transaction.splits) - 1:
+                        # Reconcile all stored splits before category selection,
+                        # including deleted categories, as in Dashboard/Reports.
+                        amount = value - allocated
+                    else:
+                        amount, _ = await fx.value(part.amount, native, budget.currency, transaction.date)
+                        allocated += amount
+                    if part.category_id in category_ids:
+                        spent += amount
+            else:
+                spent += value
+        status = merge_statuses(*inputs)
+        statuses = {name: status for name in ("spent", "remaining", "percent", "is_over_budget")}
+        statuses["monthly_limit"] = FinancialDataStatus()
+        items.append(BudgetStatus(
+            currency=budget.currency, **status.model_dump(), metric_status=statuses,
+            budget_id=budget.id, category_id=budget.category_id, category_name=budget.category.name,
+            category_color=budget.category.color, category_icon=budget.category.icon,
+            monthly_limit=budget.monthly_limit,
+            spent=spent if status.complete else None,
+            remaining=budget.monthly_limit - spent if status.complete else None,
+            percent=(float(spent / budget.monthly_limit * 100) if budget.monthly_limit else 0.0) if status.complete else None,
+            is_over_budget=spent > budget.monthly_limit if status.complete else None,
+        ))
+    return BudgetStatusResponse(year=year, month=month, items=items, **merge_statuses(*items).model_dump())

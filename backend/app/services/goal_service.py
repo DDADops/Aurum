@@ -1,7 +1,7 @@
 """Savings goals: CRUD for the goal itself, plus a running current_amount —
 the sum of all logged GoalContribution rows, computed on read rather than
 stored, so it's never out of sync with the log."""
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 
 from fastapi import HTTPException
 from sqlalchemy import exists, func, select
@@ -28,20 +28,23 @@ _SELECT_WITH_TOTAL = (
 
 
 def _to_read(row: Row) -> GoalRead:
-    current = row.current_amount
-    target = row.target_amount
-    percent = float(current / target * 100) if target else 0.0
-    return GoalRead(
-        id=row.id,
-        name=row.name,
-        currency=row.currency,
-        target_amount=target,
-        target_date=row.target_date,
-        current_amount=current,
-        remaining=target - current,
-        percent=percent,
-        is_reached=current >= target,
-    )
+    with localcontext() as context:
+        context.prec = 96
+        context.rounding = ROUND_HALF_EVEN
+        current = row.current_amount
+        target = row.target_amount
+        percent = float(current / target * 100) if target else 0.0
+        return GoalRead(
+            id=row.id,
+            name=row.name,
+            currency=row.currency,
+            target_amount=target,
+            target_date=row.target_date,
+            current_amount=current,
+            remaining=target - current,
+            percent=percent,
+            is_reached=current >= target,
+        )
 
 
 async def _read_one(session: AsyncSession, goal_id: int) -> GoalRead:
@@ -76,6 +79,8 @@ async def update_goal(session: AsyncSession, goal_id: int, payload: GoalUpdate) 
     goal = await session.scalar(select(Goal).where(Goal.id == goal_id).with_for_update())
     if goal is None:
         raise HTTPException(status_code=404, detail="Goal not found")
+    # Contributions inherit Goal.currency, so their stored history cannot be
+    # re-denominated through a PATCH that only replaces the target.
     if payload.currency is not None and payload.currency != goal.currency:
         if await session.scalar(select(exists().where(GoalContribution.goal_id == goal_id))):
             raise HTTPException(409, "currency_change_requires_empty_history")

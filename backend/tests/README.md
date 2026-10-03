@@ -509,3 +509,64 @@ budget rows: BudgetList calls percent.toFixed without a null guard and formats
 values in the global currency. Per-budget currency labels and unknown-value UI
 must be added during the frontend stage before this is user-facing. No Goal,
 Recurring, Crypto, backup-v2 or full Insights/Advice FX work is included.
+
+### Native Goal state (no reference FX)
+
+Actual domain: Goal persists target_amount and currency; GoalContribution
+persists signed amount, date and optional note. Both monetary columns are
+Numeric(20,6). Contributions are manual deposits/withdrawals denominated in
+their owning Goal.currency. There is no persisted current_amount, Account link,
+Transaction link, source-currency input or automatic financial transaction.
+The log is authoritative: current_amount is its PostgreSQL sum per Goal.id,
+including future-dated contributions regardless of the goal deadline.
+
+Goal.currency is already VARCHAR(3) NOT NULL with no database/model default.
+Migration a72e9b4c106d backfills from AppSettings(id=1).currency, uppercased and
+validated against a frozen catalog, falling back to frozen USD only if absent.
+CRUD uses shared CurrencyCode/CurrencyUpdate validation. Omitted create currency
+snapshots effective_default_currency once; later settings changes never alter
+the goal or its journal. Explicit null target_amount in PATCH now returns 422
+instead of reaching a NOT NULL database error; omission still preserves target.
+
+| Field | Authority / classification |
+| --- | --- |
+| target_amount | Persisted nominal Goal.currency target |
+| GoalContribution.amount | Persisted nominal signed delta in Goal.currency |
+| current_amount | Same-goal sum of journal amounts, Goal.currency |
+| remaining | Same-goal target - current, Goal.currency; may be negative |
+| percent | Dimensionless current / target * 100; zero target yields 0 |
+| is_reached | Same-goal current >= target |
+
+Derived arithmetic now uses local precision 96 and ROUND_HALF_EVEN, with float
+only for the existing percentage wire field and no cents quantization. Negative
+current/legacy target, overfunding, target dates and completed semantics remain
+unchanged. Empty logs are known zero; no completeness/MissingRate machinery is
+needed or added.
+
+Existing safe currency-update rules are retained: a different currency requires
+an empty journal plus explicit replacement target_amount. Any journal row,
+including offsetting deposits/withdrawals with net zero, gives 409
+currency_change_requires_empty_history. With no journal but no replacement
+target, return 409 currency_change_requires_target_replacement. Same-currency
+PATCH is allowed. The API cannot re-enter an entire journal, so there is no
+re-denomination path for goals with contributions and no automatic conversion.
+No persistent lock flag: PATCH and contribution creation serialize on the same
+Goal row with FOR UPDATE. Tests observe real PostgreSQL blocking in both orders.
+
+Search audit: the only Goal service callers are the routes. Insights/Advice
+contain no Goal consumers. Goal SQL sums are grouped by Goal.id/currency, not
+across goals; coalesce means an actually empty journal, not unknown valuation.
+No settings-currency interpretation, mixed-currency total, FX resolver/provider
+or network exists in active Goal paths. Tests preserve simultaneous USD/VND/RUB
+goals, settings-change row snapshots and contributions after settings changes;
+provider/HTTP/resolver calls and all fx_rates SQL are forbidden in CRUD tests.
+
+Backup remains unchanged: the existing transitional v1 optional currency field
+preserves explicit values and restores omitted values using backup settings;
+contributions restore under their goal. Versioned semantics remain Backup v2
+work. Existing migration/backup tests remain part of regression verification.
+Frontend still omits currency in Goal types/forms and formats using global
+currency: later work must add selectors, row/contribution currency labels,
+explicit re-denomination UX and 409 handling without global-currency fallback.
+No frontend, migration, Account/Transaction progress derivation, Recurring,
+Crypto, Backup v2 or full Insights/Advice FX integration is added here.

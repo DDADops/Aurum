@@ -15,13 +15,24 @@ class GoalCreate(BaseModel):
 
 
 class GoalUpdate(BaseModel):
+    """Currency changes require an empty contribution log and an explicit target."""
+
     currency: CurrencyUpdate = None
     name: str | None = Field(default=None, min_length=1, max_length=150)
     target_amount: Money | None = Field(default=None, gt=0)
     target_date: date_ | None = None
 
+    @field_validator("target_amount")
+    @classmethod
+    def _target_cannot_be_cleared(cls, value: Decimal | None) -> Decimal:
+        if value is None:
+            raise ValueError("target_amount must not be null")
+        return value
+
 
 class GoalContributionCreate(BaseModel):
+    """Manual nominal delta in Goal.currency; no account or reference FX source."""
+
     # Negative allowed — a withdrawal from the goal is still a contribution
     # to its running total, just in the other direction. Zero is pointless.
     amount: Money

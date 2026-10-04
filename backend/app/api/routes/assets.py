@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -10,6 +9,7 @@ from app.models.asset import Asset, AssetValuation
 from app.models.crypto import CryptoHolding
 from app.schemas.asset import AssetCreate, AssetRead, AssetUpdate, AssetValuationCreate, AssetValuationRead
 from app.services.currency_history import asset_has_history
+from app.services.valuation_service import lock_asset, write_valuation
 
 router = APIRouter(prefix="/assets", tags=["assets"])
 
@@ -29,6 +29,8 @@ async def _to_read(session: AsyncSession, asset: Asset) -> AssetRead:
         monthly_cash_flow=asset.monthly_cash_flow,
         risk_level=asset.risk_level,
         current_value=latest.value if latest else 0,
+        valuation_currency=latest.currency if latest else None,
+        valuation_currency_confirmed=latest.currency_confirmed if latest else False,
         as_of_date=latest.as_of_date if latest else asset.created_at.date(),
     )
 
@@ -52,7 +54,7 @@ async def create_asset(payload: AssetCreate, session: AsyncSession = Depends(get
     )
     session.add(asset)
     await session.flush()
-    session.add(AssetValuation(asset_id=asset.id, value=payload.value, as_of_date=payload.as_of_date))
+    await write_valuation(session, asset.id, payload.value, payload.as_of_date, asset.currency)
     await session.commit()
 
     refreshed = await session.execute(select(Asset).options(*_EAGER).where(Asset.id == asset.id))
@@ -75,7 +77,7 @@ async def update_asset(asset_id: int, payload: AssetUpdate, session: AsyncSessio
             raise HTTPException(status_code=409, detail="currency_change_requires_cash_flow_replacement")
         holding = await session.get(CryptoHolding, asset_id)
         if holding is not None:
-            for field in ("last_price", "price_change_1h", "price_change_24h", "price_change_7d", "price_change_30d", "price_change_1y"):
+            for field in ("last_price", "last_price_currency", "last_price_as_of_date", "price_change_1h", "price_change_24h", "price_change_7d", "price_change_30d", "price_change_1y"):
                 setattr(holding, field, None)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(asset, field, value)
@@ -89,21 +91,10 @@ async def add_asset_valuation(
     asset_id: int, payload: AssetValuationCreate, session: AsyncSession = Depends(get_session)
 ) -> AssetRead:
     """Records (or corrects) an asset's value as of a date. Re-submitting the
-    same date updates that day's value instead of erroring, so users can fix
-    a typo without needing a separate edit flow."""
-    asset = await session.get(Asset, asset_id)
-    if asset is None:
-        raise HTTPException(status_code=404, detail="Asset not found")
-
-    upsert_stmt = (
-        pg_insert(AssetValuation)
-        .values(asset_id=asset_id, value=payload.value, as_of_date=payload.as_of_date)
-        .on_conflict_do_update(
-            index_elements=[AssetValuation.asset_id, AssetValuation.as_of_date],
-            set_={"value": payload.value},
-        )
-    )
-    await session.execute(upsert_stmt)
+    same date updates the value only in the same confirmed denomination.
+    Different or unknown daily provenance requires explicit reconciliation."""
+    asset = await lock_asset(session, asset_id)
+    await write_valuation(session, asset_id, payload.value, payload.as_of_date, asset.currency)
     await session.commit()
 
     refreshed = await session.execute(select(Asset).options(*_EAGER).where(Asset.id == asset_id))

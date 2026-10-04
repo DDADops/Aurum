@@ -228,7 +228,7 @@ async def test_existing_snapshot_schema(test_sessionmaker):
     async with test_sessionmaker() as session:
         rows = (await session.execute(text("SELECT column_name, data_type, character_maximum_length, is_nullable FROM information_schema.columns WHERE table_name='recurring_transactions' AND column_name IN ('amount_currency','transfer_amount_currency')"))).all()
         assert set(rows) == {("amount_currency", "character varying", 3, "NO"), ("transfer_amount_currency", "character varying", 3, "YES")}
-        assert await session.scalar(text("SELECT version_num FROM alembic_version")) == "c4e8a91b720f"
+        assert await session.scalar(text("SELECT version_num FROM alembic_version")) == "e91b7a42c603"
 
 
 async def test_existing_migration_income_without_settings(test_sessionmaker, account_id):

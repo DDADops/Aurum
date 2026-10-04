@@ -281,8 +281,11 @@ async def test_backup_roundtrip_preserves_holding_and_transaction_log(client: As
     assert restored["coingecko_id"] == "bitcoin"
     assert restored["asset_id"] == holding["asset_id"]
     assert money(restored["quantity"]) == money("2")
-    assert money(restored["avg_buy_price"]) == money("50000")
-    assert money(restored["value"]) == money("100000")  # last_price survived too (2 * 50000)
+    # Transitional v1 deliberately loses quote provenance; never guess it.
+    assert restored["avg_buy_price"] is None
+    assert restored["last_price_currency"] is None
+    assert restored["last_price_as_of_date"] is None
+    assert restored["value"] is None  # Stored number survives, its denomination does not.
 
 
 async def test_backup_roundtrip_preserves_portfolio_assignment(client: AsyncClient, monkeypatch):

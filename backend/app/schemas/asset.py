@@ -19,6 +19,8 @@ class AssetValuationRead(BaseModel):
     id: int
     value: Decimal
     as_of_date: date_
+    currency: str | None
+    currency_confirmed: bool
 
 
 class AssetBase(BaseModel):
@@ -55,3 +57,5 @@ class AssetRead(AssetBase):
     has_monetary_history: bool
     current_value: Decimal
     as_of_date: date_
+    valuation_currency: str | None
+    valuation_currency_confirmed: bool

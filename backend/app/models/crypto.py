@@ -1,8 +1,8 @@
 """Crypto holdings: a thin layer on top of the existing Asset/AssetValuation
 engine (see models/asset.py) rather than a parallel system. Net worth's
 number for a holding still lives as ordinary AssetValuation rows, kept
-current by services/crypto_service.py — Net Worth requires zero changes to
-treat a crypto holding like any other manually tracked asset.
+current by services/crypto_service.py with explicit quote provenance.
+Aggregate consumers must use each valuation's denomination.
 
 Quantity and average buy price are NOT stored — they're computed from the
 CryptoTransaction log (same "you record it, we derive it" shape as
@@ -85,9 +85,11 @@ class CryptoHolding(Base, TimestampMixin):
     network: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     # Cached from the last successful sync (services/crypto_service.py) —
-    # in the app's display currency (see AppSettings.currency). Null until
-    # the first sync completes.
+    # denominated in last_price_currency at last_price_as_of_date. A legacy
+    # number without both provenance fields must not be treated as known money.
     last_price: Mapped[Numeric | None] = mapped_column(Numeric(38, 18), nullable=True)
+    last_price_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    last_price_as_of_date: Mapped[date_ | None] = mapped_column(Date, nullable=True)
     price_change_1h: Mapped[Numeric | None] = mapped_column(Numeric(10, 4), nullable=True)
     price_change_24h: Mapped[Numeric | None] = mapped_column(Numeric(10, 4), nullable=True)
     price_change_7d: Mapped[Numeric | None] = mapped_column(Numeric(10, 4), nullable=True)
@@ -121,10 +123,11 @@ class CryptoTransaction(Base, TimestampMixin):
         Enum(CryptoTransactionType, name="crypto_transaction_type", native_enum=False, length=10), nullable=False
     )
     quantity: Mapped[Numeric] = mapped_column(Numeric(38, 18), nullable=False)
-    # Price paid (buy) or received (sell) per unit, in the app's display
-    # currency at the time of the transaction — not re-derived later, since
+    # Price paid (buy) or received (sell) per unit, in quote_currency. Legacy
+    # NULL means unknown, never current settings — not re-derived later, since
     # what you actually paid doesn't change with today's market price.
     price_per_unit: Mapped[Numeric] = mapped_column(Numeric(38, 18), nullable=False)
+    quote_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     date: Mapped[date_] = mapped_column(Date, nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 

@@ -273,7 +273,9 @@ async def restore_backup(session: AsyncSession, payload: BackupPayload) -> None:
         session.add_all(transactions_by_id.values())
         session.add_all(TransactionSplit(**row.model_dump()) for row in payload.transaction_splits)
 
-        session.add_all(AssetValuation(**row.model_dump()) for row in payload.asset_valuations)
+        # Transitional v1 restore: no provenance evidence; Backup v2 will preserve it.
+        session.add_all(AssetValuation(**row.model_dump(), currency=None, currency_confirmed=False)
+                        for row in payload.asset_valuations)
 
         session.add_all(CryptoPortfolio(**row.model_dump()) for row in payload.crypto_portfolios)
         # A pre-portfolios backup has no crypto_portfolios and every holding's

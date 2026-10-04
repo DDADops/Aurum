@@ -655,3 +655,129 @@ existing migration roundtrips, backup compatibility and zero FX/provider/HTTP.
 Frontend remains unchanged: currency labels, destination amount input, explicit
 monetary confirmation and conflict handling remain required. Crypto, Backup v2,
 full Insights/Advice FX and frontend work are deferred.
+
+### Crypto stage 1: quote provenance and immutable daily denomination
+
+Migration e91b7a42c603 follows the verified previous head c4e8a91b720f.
+It adds only five provenance columns; UNIQUE(asset_id, as_of_date) is unchanged.
+All pre-existing valuations, including non-crypto, get currency=NULL and
+currency_confirmed=FALSE. Historical Asset currency edits make today's Asset
+currency insufficient evidence. CryptoTransaction.quote_currency and cache
+currency/date likewise remain NULL. No settings, environment, runtime helpers,
+provider or network are consulted by the migration. The temporary FALSE server
+default is removed; the ORM's conservative FALSE default never blesses a row.
+Downgrade drops only these five columns and preserves amounts/quantities.
+
+Actual model inventory:
+- CryptoHolding before: asset_id (PK and Asset FK), portfolio_id, coingecko_id,
+  symbol, name, thumb_url, network, last_price, price_change_1h/24h/7d/30d/1y,
+  created_at, updated_at; asset/portfolio/transactions relationships.
+  After: also last_price_currency VARCHAR(3) NULL and
+  last_price_as_of_date DATE NULL.
+- CryptoTransaction: id, asset_id (holding FK), type, quantity, price_per_unit,
+  date, note, created_at, updated_at; now also quote_currency VARCHAR(3) NULL.
+  quantity is crypto units; price_per_unit is the only persisted quote-money
+  field. Both remain Numeric(38,18). Quantity and average cost are derived from
+  buys/sells; sells preserve the remaining weighted average cost.
+- AssetValuation before: id, asset_id, value Numeric(38,18), as_of_date.
+  After: also currency VARCHAR(3) NULL and currency_confirmed BOOLEAN NOT NULL.
+  Asset currency is native metadata, not a fallback for valuation denomination.
+
+Every production valuation writer uses valuation_service.write_valuation:
+- POST /assets creates the initial manual native valuation under its Asset lock.
+- POST /assets/{id}/valuations locks/re-reads Asset and uses its currency.
+- Crypto holding creation seeds an observation in the exact provider quote.
+- Crypto refresh (forced POST or lazy GET) writes quantity * provider price in
+  the exact requested quote, which may differ from Asset.currency.
+- Crypto transaction add/monetary PATCH/delete recalculates using cached price
+  only when price, currency AND cache observation date are present; the new
+  valuation uses that cache currency. Metadata-only PATCH does not revalue.
+- Backup v1 is the deliberate exception: restores original values with NULL
+  currency and FALSE confirmation; no inferred denomination. Its format is
+  unchanged. This is transitional compatibility; Backup v2 will preserve
+  versioned provenance. Crypto transaction/cache provenance is omitted by v1
+  and restored NULL too.
+
+Daily writer protocol: lock/re-read Asset, then existing daily valuation with
+FOR UPDATE. The parent lock serializes even the absent-row case; the unique
+constraint remains final DB protection. Missing row inserts known provenance.
+Same confirmed currency updates only value. Different or NULL/unconfirmed
+provenance raises HTTP 409 valuation_provenance_conflict, preserving the row.
+No reconciliation API, intraday timestamp, extra daily row or FX is introduced.
+Manual same-day corrections follow the identical rule. Concurrent same-currency
+writers serialize into one row; different-currency losers cannot relabel it.
+
+All crypto writers use Asset -> CryptoHolding -> AssetValuation locking.
+Batch refresh visits Asset IDs in ascending order. HTTP occurs before these
+locks (including the seed fetch before any holding inserts). After HTTP the
+writer rechecks coin ID and native Asset currency and reloads quantities.
+Changed request assumptions produce 409 crypto_refresh_state_changed_retry;
+deleted assets/holdings produce 404. A settings change in flight is allowed:
+the response is persisted strictly under its captured request quote, subject
+to the daily conflict rule. No response is relabelled as the new settings quote.
+
+Price, quote and local successful-fetch calendar date commit atomically with
+all generated valuations and sync timestamp. The date is a cache observation
+date, not a historical exchange close. A conflict anywhere in a refresh rolls
+back the entire write phase, including earlier holdings and last_synced_at.
+Same-day different-currency refresh fails; next-day refresh can store a new
+currency while preserving the previous day. An empty holding without daily
+history can cache a price without creating monetary history. An existing daily
+valuation is still checked/revalued when the position has fallen to zero.
+
+New crypto transactions snapshot normalized settings currency when the optional
+explicit quote_currency is omitted. Explicit quote inputs are validated currency
+codes. Holding creation's initial buy snapshots the quote captured before its
+seed request. Price PATCH (model_fields_set contains price_per_unit) explicitly
+re-enters denomination using supplied quote or current settings. Note-only,
+quantity-only and date-only edits preserve the transaction quote. Currency-only
+PATCH raises 422 crypto_price_reentry_required. Legacy NULL is visible on reads.
+
+Asset history predicate is unchanged: EXISTS(any AssetValuation by asset_id)
+OR EXISTS(any CryptoTransaction by asset_id). No value/date/confirmation filter;
+zero/future/unknown rows count. An empty holding alone does not count. Allowed
+native currency changes clear last_price, last_price_currency,
+last_price_as_of_date and price_change_1h/24h/7d/30d/1y. The existing cash-flow
+rule remains: non-NULL monthly_cash_flow requires explicit replacement or NULL
+in the same PATCH, otherwise currency_change_requires_cash_flow_replacement.
+Settings updates never rewrite persisted quote/cache/valuation provenance.
+
+Read safety, without Stage 2 conversion:
+- /assets exposes valuation_currency and valuation_currency_confirmed alongside
+  current_value; /assets/{id}/valuations exposes currency and confirmation.
+- Crypto transaction reads expose quote_currency; holdings expose cached quote
+  and date plus cost_basis_currency. Unknown cache is not a known current value.
+- Unknown/mixed transaction quotes yield NULL average/cost; P&L is NULL if cost
+  and current-price quotes differ. Quantities remain readable.
+- Crypto history reads values and provenance in one SQL snapshot. Unknown
+  history gives 409 valuation_currency_unconfirmed; mixed currencies give 409
+  crypto_aggregate_conversion_required. Single known denomination is exposed
+  as response.currency; no partial total or guessed conversion is returned.
+- Net Worth retains conservative linked-crypto exclusion. Non-crypto daily rows
+  now also require confirmed currency equal to Asset.currency before its existing
+  native FX path is used. Unknown/differently-denominated rows mark completeness
+  false instead of being interpreted as native. Per-observation FX is deferred.
+
+Audit/callers: crypto routes call the crypto service; manual assets routes and
+backup restore are the other writers. No scheduler/job exists. Provider access
+is /coins/markets with explicit vs_currency, plus on-demand 90d performance and
+coin search. Numeric provider JSON is decoded as Decimal; float is used only
+at percentage response boundaries. No reference FX resolver/provider/storage
+is used in crypto writes. CryptoSyncState remains a global sync timestamp, not
+price denomination evidence. Portfolio/network/risk fields are non-monetary.
+
+Deferred to Stage 2: historical per-valuation FX, complete crypto Net Worth,
+converted cost basis/P&L, portfolio totals and cross-currency ordering (the
+existing nominal cost ordering is not converted). Full Insights/Advice, Backup
+v2 and frontend remain out of scope. Frontend still needs quote/date labels,
+unknown/reconciliation UX, explicit monetary confirmation, and 409 handling;
+it must stop formatting crypto quote values implicitly in global settings.
+
+Tests cover migration upgrade/downgrade/re-upgrade, conservative crypto AND
+non-crypto legacy rows, unchanged daily uniqueness, manual/provider precision,
+settings/price re-entry, unknown reads/v1 restore, atomic multi-holding rollback,
+next-day different quote, and actual PostgreSQL waits/NOWAIT. Concurrency tests
+cover unlocked HTTP, state mutation during HTTP, locked write phase, native
+currency mutation vs transaction/manual valuation writers, daily same/different
+quote writers and two in-flight refreshes. FX resolver/provider/SQL are forbidden
+in the dedicated provenance test.

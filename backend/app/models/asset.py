@@ -7,7 +7,7 @@ through the Transactions feature. See services/net_worth_service.py.
 from datetime import date as date_
 from decimal import Decimal
 
-from sqlalchemy import Date, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -62,5 +62,7 @@ class AssetValuation(Base):
     asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), nullable=False)
     value: Mapped[Decimal] = mapped_column(Numeric(38, 18, asdecimal=True), nullable=False)
     as_of_date: Mapped[date_] = mapped_column(Date, nullable=False)
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    currency_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     asset: Mapped["Asset"] = relationship(back_populates="valuations")

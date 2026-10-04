@@ -5,14 +5,16 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.currency import CurrencyCode, CurrencyUpdate
 from app.models.enums import CryptoTransactionType, RiskLevel
 
 
 class CryptoTransactionCreate(BaseModel):
+    quote_currency: CurrencyCode | None = None
     type: CryptoTransactionType
     quantity: Decimal = Field(gt=0, max_digits=38, decimal_places=18)
-    # Price paid (buy) / received (sell) per unit, in the app's display
-    # currency — not fetched from CoinGecko, this is what the user actually
+    # Price paid (buy) / received (sell) per unit. Explicit quote_currency
+    # wins; omission snapshots settings. Not fetched from CoinGecko: what the user actually
     # paid, which the market price today has nothing to do with.
     price_per_unit: Decimal = Field(gt=0, max_digits=38, decimal_places=18)
     date: date_
@@ -20,6 +22,7 @@ class CryptoTransactionCreate(BaseModel):
 
 
 class CryptoTransactionUpdate(BaseModel):
+    quote_currency: CurrencyUpdate = None
     type: CryptoTransactionType | None = None
     quantity: Decimal | None = Field(default=None, gt=0, max_digits=38, decimal_places=18)
     price_per_unit: Decimal | None = Field(default=None, gt=0, max_digits=38, decimal_places=18)
@@ -31,6 +34,7 @@ class CryptoTransactionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    quote_currency: str | None
     asset_id: int
     type: CryptoTransactionType
     quantity: Decimal
@@ -109,9 +113,12 @@ class CryptoHoldingRead(BaseModel):
     # services/crypto_service.py's _compute_position) — never stored.
     quantity: Decimal
     avg_buy_price: Decimal | None
+    cost_basis_currency: str | None
 
     # Cached from the last successful CoinGecko sync — null until the
     # first one completes.
+    last_price_currency: str | None
+    last_price_as_of_date: date_ | None
     current_price: Decimal | None
     price_change_1h: Decimal | None
     price_change_24h: Decimal | None
@@ -184,6 +191,7 @@ class CryptoHistoryResponse(BaseModel):
     scoped to crypto-class assets only (see services/crypto_service.py's
     get_crypto_history). Powers the History chart on the Crypto tab."""
 
+    currency: str | None = None
     range: str
     current: Decimal
     change_amount: Decimal

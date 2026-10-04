@@ -161,12 +161,13 @@ async def test_precision_migration_roundtrip_and_loss_preflight(test_sessionmake
             await session.flush()
             session.add_all([
                 TransactionSplit(transaction_id=transaction_id, category_id=category_id, amount=Decimal("123.45")),
-                AssetValuation(asset_id=asset.id, value=Decimal("999999999999.99"), as_of_date=date.today()),
                 GoalContribution(goal_id=goal_id, amount=Decimal("-12.34"), date=date.today()),
-                CryptoHolding(asset_id=asset.id, portfolio_id=portfolio.id, coingecko_id="bitcoin", symbol="BTC", name="Bitcoin", last_price=Decimal("1.123456789123456789")),
             ])
             await session.flush()
-            session.add(CryptoTransaction(asset_id=asset.id, type=CryptoTransactionType.BUY, quantity=Decimal("0.123456789123456789"), price_per_unit=Decimal("1.123456789123456789"), date=date.today()))
+            # Historical schema predates provenance; do not use current ORM columns.
+            await session.execute(text("INSERT INTO asset_valuations (asset_id,value,as_of_date) VALUES (:id,999999999999.99,:day)"), {"id": asset.id, "day": date.today()})
+            await session.execute(text("INSERT INTO crypto_holdings (asset_id,portfolio_id,coingecko_id,symbol,name,last_price) VALUES (:id,:portfolio,'bitcoin','BTC','Bitcoin',1.123456789123456789)"), {"id": asset.id, "portfolio": portfolio.id})
+            await session.execute(text("INSERT INTO crypto_transactions (asset_id,type,quantity,price_per_unit,date) VALUES (:id,'BUY',0.123456789123456789,1.123456789123456789,:day)"), {"id": asset.id, "day": date.today()})
             await session.commit()
         old_values, old_types, revision, crypto = await snapshot(test_sessionmaker)
         assert revision == PREVIOUS

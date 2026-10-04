@@ -231,10 +231,13 @@ async def _value_net_worth(session: AsyncSession, range_key: str) -> NetWorthSum
     crypto_ids = set((await session.scalars(select(CryptoHolding.asset_id))).all())
     cash_events = await _cash_cumulative_events(session, {account.id for account in accounts}, through=today)
     valuations: dict[int, list[tuple[date_, Decimal | None]]] = defaultdict(list)
-    for asset_id, day, value in await session.execute(select(
+    valuation_provenance = defaultdict(list)
+    for asset_id, day, value, currency, confirmed in await session.execute(select(
         AssetValuation.asset_id, AssetValuation.as_of_date, AssetValuation.value,
+        AssetValuation.currency, AssetValuation.currency_confirmed,
     ).order_by(AssetValuation.as_of_date, AssetValuation.id)):
         valuations[asset_id].append((day, value))
+        valuation_provenance[asset_id].append((currency, confirmed))
     dates = [day for events in (*cash_events.values(), *valuations.values()) for day, _ in events if day <= today]
     start = today - timedelta(days=RANGE_DAYS[range_key] - 1) if range_key in RANGE_DAYS else min(dates, default=today)
     cash_history = {account.id: _History(cash_events.get(account.id, [])) for account in accounts}
@@ -266,6 +269,14 @@ async def _value_net_worth(session: AsyncSession, range_key: str) -> NetWorthSum
             if not valuations[asset.id]:
                 continue
             native = asset_history[asset.id].at(day)
+            index = asset_history[asset.id].index
+            if index:
+                currency, confirmed = valuation_provenance[asset.id][index - 1]
+                # Stage 1 only: never treat unknown/different quote as native.
+                # Per-observation conversion and crypto integration are Stage 2.
+                if not confirmed or currency != asset.currency:
+                    statuses.append(_issue("valuation_currency_unconfirmed"))
+                    continue
             value, status = await fx.value(native, asset.currency, day)
             statuses.append(status)
             if value is not None:

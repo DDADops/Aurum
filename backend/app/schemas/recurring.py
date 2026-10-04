@@ -10,6 +10,7 @@ from app.models.enums import RecurringFrequency, TransactionType
 
 
 class RecurringTransactionCreate(BaseModel):
+    # Optional compatibility assertions; authoritative snapshots come from locked Accounts.
     amount_currency: CurrencyCode | None = None
     transfer_amount: Money | None = Field(default=None, gt=0)
     transfer_amount_currency: CurrencyCode | None = None
@@ -47,6 +48,13 @@ class RecurringTransactionUpdate(BaseModel):
     frequency: RecurringFrequency | None = None
     anchor_date: date_ | None = None
     is_active: bool | None = None
+
+    @field_validator("account_id", "type", "amount", "description", "frequency", "anchor_date", "is_active")
+    @classmethod
+    def _not_null_when_supplied(cls, value):
+        if value is None:
+            raise ValueError("Field cannot be null")
+        return value
 
     @field_validator("description")
     @classmethod

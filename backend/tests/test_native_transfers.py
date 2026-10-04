@@ -275,7 +275,7 @@ async def test_writer_uses_currency_after_waiting_for_real_currency_patch(client
         assert (await asyncio.wait_for(changer, 3)).status_code == 200
         response = await asyncio.wait_for(writer, 3)
         if operation == "recurring":
-            assert response.status_code == 409 and response.json()["detail"] == "recurring_currency_revalidation_required"
+            assert response.status_code == 409 and response.json()["detail"] == "recurring_currency_mismatch"
         else:
             assert response.status_code == 400 and response.json()["detail"] == "cross_currency_transfer_amount_required"
         if original_transaction:

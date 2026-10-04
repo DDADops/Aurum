@@ -570,3 +570,88 @@ currency: later work must add selectors, row/contribution currency labels,
 explicit re-denomination UX and 409 handling without global-currency fallback.
 No frontend, migration, Account/Transaction progress derivation, Recurring,
 Crypto, Backup v2 or full Insights/Advice FX integration is added here.
+
+### Recurring native instructions and explicit revalidation
+
+Schema inspection found this stage's requested columns already present:
+amount_currency VARCHAR(3) NOT NULL, transfer_amount Numeric(20,6) NULL and
+transfer_amount_currency VARCHAR(3) NULL were added by a72e9b4c106d, whose
+down_revision is f83a2c91d607. Current head remains c4e8a91b720f (FX). No new,
+duplicate or no-op migration is added and no historical migration is changed.
+The existing revision validates source accounts/currency codes, adds nullable
+fields, copies uppercase source currency, copies transfer destination currency
+when present, fills destination amount only for same-currency transfers, then
+makes source currency NOT NULL. Old cross-currency transfers had no destination
+amount column, so their amount stays NULL. Missing destinations also remain
+unresolved. This self-contained revision has frozen constants, no runtime/env
+dependency, and is tested with absent settings. Its existing guarded downgrade
+covers the original native-invariant changes, not only recurring columns;
+upgrade/downgrade/re-upgrade and loss-prevention tests remain in force.
+
+Model inventory is unchanged: id, account_id, category_id, transfer_account_id,
+type, amount, amount_currency, transfer_amount, transfer_amount_currency,
+description, merchant, notes, frequency, anchor_date, last_posted_date,
+is_active, created_at, updated_at and account/category/destination relationships.
+Source deletion cascades templates; destination/category deletion sets their
+references NULL. Account deletion with actual transaction history stays blocked.
+
+Only /recurring routes call CRUD/post services. There is no scheduler, job,
+batch due posting or posting through Insights/Advice. List computes next_due
+from anchor_date or advance(last_posted_date, frequency), is_due additionally
+requires is_active. Manual Post now still dates one Transaction today and moves
+last_posted_date to today; it does not backfill occurrences or enforce is_due.
+Weekly/monthly/yearly advancement, end-of-month/leap-day clamping are unchanged.
+
+Create uses sorted Account FOR UPDATE locks and refreshes currencies before
+normalizing the instruction. Source snapshot always comes from the source;
+transfer destination snapshot comes from the destination. Same-currency amount
+normalizes exactly to amount, unequal explicit destination amounts fail. Cross
+requires an explicit positive destination amount, never a reference rate.
+Optional legacy currency inputs are assertions that must equal derived values,
+not client authority. Invalid final instructions cannot enter through create
+or monetary PATCH; explicit null required fields are rejected by the schema.
+
+PATCH detects explicit monetary re-entry using model_fields_set for amount,
+account_id, type, transfer_account_id, transfer_amount (even unchanged values).
+It locks the union of discovered old and supplied new Account IDs in ascending
+order, then locks/reloads the template. Non-monetary updates preserve snapshots
+and unresolved amounts. Snapshot-only edits are rejected. Monetary cross PATCH
+must explicitly re-enter destination amount; cross-to-same normalizes it.
+Transfer-to-income/expense clears destination ID/amount/currency and rejects
+explicit non-null destination fields. No stale snapshot is refreshed by editing
+description, category or schedule. Source/destination snapshots refresh together
+only after final monetary validation.
+
+Posting uses the same account-first/template-second lock helper. Template
+NOWAIT prevents an inverse template-first editor from deadlocking this path.
+Changed account references yield recurring_accounts_changed_retry, busy or
+concurrently changed instructions yield recurring_instruction_changed_retry.
+Posting compares the discovered last_posted_date/updated_at version after lock:
+two posts that discovered the same due instruction cannot both advance it.
+This is concurrent-request protection, not an idempotency key for intentional
+later Post now requests. Existing manual posting behavior is otherwise retained.
+
+Under locks posting checks both currencies: mismatch gives 409
+recurring_currency_mismatch. Missing destination, unresolved destination amount
+or invalid legacy monetary state gives 409 recurring_currency_revalidation_required.
+Failure leaves last_posted_date and Transactions untouched. Successful posting
+uses TransactionCreate and shared normalize_transfer, copying both amounts.
+No amount/rate conversion or execution-rate persistence is introduced.
+
+Audit: source/destination amounts remain nominal instructions with snapshots;
+same-currency normalization is exact Decimal; posting copies execution amounts;
+dates/flags are schedule metadata. There are no sums, float money, FX resolver,
+provider or fx_rates accesses in recurring paths. Actual Transaction history
+alone controls Account currency edits; even a posted template is not history
+after its Transactions are deleted. Read snapshots plus posting conflicts are
+the backend status contract; no persistent or derived extra boolean is added.
+
+Backup v1 already preserves explicit snapshots and derives omitted legacy ones
+from restored accounts, with only same-currency amount inference. Its code and
+format are unchanged; legacy unresolved templates remain readable/reconcilable.
+Tests cover mismatch/re-entry, cross postings and native balances, deleted
+accounts, lock ordering/old-new union, create/PATCH/post races, concurrent posts,
+existing migration roundtrips, backup compatibility and zero FX/provider/HTTP.
+Frontend remains unchanged: currency labels, destination amount input, explicit
+monetary confirmation and conflict handling remain required. Crypto, Backup v2,
+full Insights/Advice FX and frontend work are deferred.

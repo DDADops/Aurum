@@ -312,22 +312,26 @@ async def test_backup_v1_extension_preserves_authoritative_and_unresolved_fields
     assert (await client.get("/backup/export")).json()["transactions"][0]["transfer_amount"] is None
 
 
-async def test_recurring_persists_destination_instruction_without_executing_it(client, account_id):
+async def test_recurring_reconciles_legacy_destination_instruction(client, account_id, test_sessionmaker):
     same = await new_account(client)
     cross = await new_account(client, "VND")
     same_template = await template(client, account_id, type="transfer", transfer_account_id=same)
     assert same_template["transfer_amount_currency"] == "USD"
     assert Decimal(same_template["transfer_amount"]) == Decimal(same_template["amount"])
-    unresolved = await template(client, account_id, type="transfer", transfer_account_id=cross)
+    unresolved = await template(client, account_id, type="transfer", transfer_account_id=cross, transfer_amount="25000")
+    # Legacy migration/restore can produce NULL; new instructions may not.
+    async with test_sessionmaker() as session:
+        await session.execute(text("UPDATE recurring_transactions SET transfer_amount=NULL WHERE id=:id"), {"id": unresolved["id"]})
+        await session.commit()
+    unresolved = next(r for r in (await client.get("/recurring")).json() if r["id"] == unresolved["id"])
     assert unresolved["transfer_amount"] is None
     assert unresolved["transfer_amount_currency"] == "VND"
     assert (await client.post(f"/recurring/{unresolved['id']}/post")).status_code == 409
     updated = await client.patch(f"/recurring/{unresolved['id']}", json={"transfer_amount": "25000.123456", "transfer_amount_currency": "vnd"})
     assert updated.status_code == 200
     assert Decimal(updated.json()["transfer_amount"]) == Decimal("25000.123456")
-    # An authoritative cross-currency amount can be stored, but the old writer
-    # is deliberately not allowed to silently ignore it.
-    assert (await client.post(f"/recurring/{unresolved['id']}/post")).status_code == 409
+    # Reconciled instructions now post both authoritative amounts.
+    assert (await client.post(f"/recurring/{unresolved['id']}/post")).status_code == 201
     updated = await client.patch(f"/recurring/{unresolved['id']}", json={"type": "expense", "transfer_account_id": None})
     assert updated.status_code == 200
     assert updated.json()["transfer_amount"] is updated.json()["transfer_amount_currency"] is None

@@ -26,10 +26,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.money import sum_money
 from app.models.account import Account
 from app.models.asset import Asset, AssetValuation
-from app.models.crypto import CryptoHolding
 from app.models.enums import AccountType, AssetClass, CapitalRole, RiskLevel
 from app.models.transaction import Transaction
-from app.schemas.money import FinancialDataIssue, FinancialDataStatus, MissingRate
+from app.schemas.money import FinancialDataIssue, FinancialDataStatus
 from app.schemas.net_worth import (
     CapitalRoleSummary,
     NetWorthBreakdownItem,
@@ -39,7 +38,8 @@ from app.schemas.net_worth import (
     RiskLevelSummary,
 )
 from app.services.financial_data_service import merge_statuses
-from app.services.fx_service import ResolvedRate, convert, resolve_rate
+from app.services.fx_service import resolve_rate
+from app.services.valuation_read_service import ReferenceValues as _ReferenceValues, ValuationHistory
 from app.services.native_balance_service import native_legs
 from app.services.settings_service import get_or_create_app_settings
 
@@ -88,27 +88,6 @@ _RISK_META: dict[RiskLevel, tuple[str, str]] = {
 
 def _issue(code: str) -> FinancialDataStatus:
     return FinancialDataStatus(complete=False, data_issues=[FinancialDataIssue(code=code)])
-
-
-class _ReferenceValues:
-    """Request-local FX cache, including missing results. Never fetches providers."""
-
-    def __init__(self, session: AsyncSession, currency: str, max_age_days: int):
-        self.session = session
-        self.currency = currency
-        self.max_age_days = max_age_days
-        self.rates: dict[tuple[str, str, date_, int], ResolvedRate | MissingRate] = {}
-
-    async def value(self, amount: Decimal, native: str, day: date_) -> tuple[Decimal | None, FinancialDataStatus]:
-        if amount == 0:
-            return Decimal("0"), FinancialDataStatus()
-        key = (native, self.currency, day, self.max_age_days)
-        if key not in self.rates:
-            self.rates[key] = await resolve_rate(self.session, *key)
-        rate = self.rates[key]
-        if isinstance(rate, MissingRate):
-            return None, FinancialDataStatus(complete=False, missing_rates=[rate])
-        return convert(amount, rate), FinancialDataStatus()
 
 
 async def _cash_cumulative_events(
@@ -224,24 +203,21 @@ async def get_net_worth_summary(session: AsyncSession, range_key: str) -> NetWor
 async def _value_net_worth(session: AsyncSession, range_key: str) -> NetWorthSummary:
     today = date_.today()
     settings = await get_or_create_app_settings(session)
-    fx = _ReferenceValues(session, settings.currency, settings.fx_max_age_days)
+    fx = _ReferenceValues(session, settings.currency, settings.fx_max_age_days, resolver=resolve_rate)
     # Archive inclusion and account-type scope are unchanged.
     accounts = list((await session.scalars(select(Account).where(Account.type.in_(CASH_ACCOUNT_TYPES)))).all())
     assets = list((await session.scalars(select(Asset).order_by(Asset.id))).all())
-    crypto_ids = set((await session.scalars(select(CryptoHolding.asset_id))).all())
     cash_events = await _cash_cumulative_events(session, {account.id for account in accounts}, through=today)
-    valuations: dict[int, list[tuple[date_, Decimal | None]]] = defaultdict(list)
-    valuation_provenance = defaultdict(list)
+    valuations: dict[int, list[tuple[date_, Decimal, str | None, bool]]] = defaultdict(list)
     for asset_id, day, value, currency, confirmed in await session.execute(select(
         AssetValuation.asset_id, AssetValuation.as_of_date, AssetValuation.value,
         AssetValuation.currency, AssetValuation.currency_confirmed,
     ).order_by(AssetValuation.as_of_date, AssetValuation.id)):
-        valuations[asset_id].append((day, value))
-        valuation_provenance[asset_id].append((currency, confirmed))
-    dates = [day for events in (*cash_events.values(), *valuations.values()) for day, _ in events if day <= today]
+        valuations[asset_id].append((day, value, currency, confirmed))
+    dates = [day for events in (*cash_events.values(), *valuations.values()) for day, *_ in events if day <= today]
     start = today - timedelta(days=RANGE_DAYS[range_key] - 1) if range_key in RANGE_DAYS else min(dates, default=today)
     cash_history = {account.id: _History(cash_events.get(account.id, [])) for account in accounts}
-    asset_history = {asset.id: _History(valuations[asset.id]) for asset in assets}
+    asset_history = {asset.id: ValuationHistory(valuations[asset.id]) for asset in assets}
     series: list[NetWorthPoint] = []
     day = start
     while day <= today:
@@ -258,26 +234,7 @@ async def _value_net_worth(session: AsyncSession, range_key: str) -> NetWorthSum
             if value is not None:
                 cash_values.append(value)
         for asset in assets:
-            # No history is unknown, as before. With a dated history, the asset
-            # enters the chart at its first valuation; earlier native value is 0.
-            if not valuations[asset.id]:
-                statuses.append(_issue("valuation_missing"))
-            if asset.id in crypto_ids:
-                # Legacy synced valuations lack historical quote provenance.
-                statuses.append(_issue("valuation_currency_unconfirmed"))
-                continue
-            if not valuations[asset.id]:
-                continue
-            native = asset_history[asset.id].at(day)
-            index = asset_history[asset.id].index
-            if index:
-                currency, confirmed = valuation_provenance[asset.id][index - 1]
-                # Stage 1 only: never treat unknown/different quote as native.
-                # Per-observation conversion and crypto integration are Stage 2.
-                if not confirmed or currency != asset.currency:
-                    statuses.append(_issue("valuation_currency_unconfirmed"))
-                    continue
-            value, status = await fx.value(native, asset.currency, day)
+            value, status = await asset_history[asset.id].at(day, fx)
             statuses.append(status)
             if value is not None:
                 asset_values[asset.id] = value
@@ -294,7 +251,8 @@ async def _value_net_worth(session: AsyncSession, range_key: str) -> NetWorthSum
     change = current.value - series[0].value if change_status.complete else None
     change_percent = _percent(change, series[0].value) if change is not None and series[0].value != 0 else None
     metrics = {"current": current_status, "change_amount": change_status, "change_percent": change_status,
-               "breakdown": current_status, "capital_roles": current_status, "risk_levels": current_status}
+               "breakdown": current_status, "capital_roles": current_status, "risk_levels": current_status,
+               "series": merge_statuses(*series)}
     breakdown, roles, risk = [], [], []
     if current.complete:
         breakdown = _breakdown(assets, asset_values, cash)

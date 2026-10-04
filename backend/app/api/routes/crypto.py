@@ -29,6 +29,7 @@ from app.services.crypto_service import (
     list_portfolios,
     list_transactions,
     refresh_prices,
+    read_holdings as read_cached_holdings,
     search_coins,
     update_holding,
     update_portfolio,
@@ -68,11 +69,8 @@ async def delete_portfolio_route(portfolio_id: int, session: AsyncSession = Depe
 async def read_holdings(
     portfolio_id: int | None = None, session: AsyncSession = Depends(get_session)
 ) -> CryptoSyncResult:
-    """Opening the Crypto tab lands here — this is also where the lazy
-    once-a-day auto-refresh happens (see services/crypto_service.py):
-    prices only actually get re-fetched from CoinGecko if 24h have passed
-    since the last sync, otherwise this just reads the current cache."""
-    return await refresh_prices(session, force=False, portfolio_id=portfolio_id)
+    """Read cached observations through local dated reference FX; no provider HTTP."""
+    return await read_cached_holdings(session, portfolio_id)
 
 
 @router.post("/refresh", response_model=CryptoSyncResult)

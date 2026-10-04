@@ -1,8 +1,8 @@
 """Crypto price sync + position accounting: CoinGecko Demo API calls,
 written into the *existing* Asset/AssetValuation engine (see
 models/asset.py) rather than a parallel value-tracking system. A holding's
-value is an AssetValuation row with its own denomination. Aggregate FX
-integration is deferred; unknown or mixed quote money is not summed as known.
+value is an AssetValuation row with its own denomination. Read aggregates
+resolve local dated reference FX; writers preserve the exact provider quote.
 
 Quantity and average buy price are never stored — they're derived from the
 CryptoTransaction log every time (see _compute_position), the same
@@ -11,10 +11,9 @@ CryptoTransaction log every time (see _compute_position), the same
 Refreshes are deliberately never automatic in the background — same
 reasoning as recurring transactions (see services/recurring_service.py):
 there's no scheduler/worker in this stack, and a rate-limited free API key
-makes "poll constantly" actively counterproductive anyway. Three triggers
-only: the "Refresh prices" button (force=True), a lazy once-a-day check
-that piggybacks on GET /crypto/holdings (force=False), and adding a brand
-new holding (a one-off seed fetch, justified by the explicit user action).
+makes "poll constantly" actively counterproductive anyway. Provider writes occur
+only through explicit actions: the "Refresh prices" button and adding a
+new holding (a one-off seed fetch). GET /crypto/holdings only reads the cache.
 Editing quantity via a buy/sell transaction never calls CoinGecko — it
 reuses the last cached price.
 """
@@ -22,7 +21,6 @@ import asyncio
 from datetime import date as date_
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, localcontext
-from itertools import groupby
 from typing import NamedTuple
 
 import httpx
@@ -36,7 +34,6 @@ from app.models.asset import Asset, AssetValuation
 from app.models.crypto import CryptoHolding, CryptoPortfolio, CryptoSyncState, CryptoTransaction
 from app.models.enums import AssetClass, CapitalRole, CryptoTransactionType
 from app.schemas.crypto import (
-    CryptoHistoryPoint,
     CryptoHistoryResponse,
     CryptoHoldingCreate,
     CryptoHoldingRead,
@@ -53,6 +50,8 @@ from app.schemas.crypto import (
 )
 from app.services.settings_service import effective_default_currency, get_or_create_app_settings
 from app.services.valuation_service import lock_asset, write_valuation
+from app.services.crypto_read_service import holding_read, holding_reads, reference_values, history
+from app.services.financial_data_service import merge_statuses
 
 # Same 8-hue, colorblind-safe categorical set app/db/seed.py assigns default
 # categories from — reused here (cycling by creation order) so portfolio tab
@@ -184,7 +183,8 @@ def _compute_position(transactions: list[CryptoTransaction]) -> tuple[Decimal, D
     """Replay quantities; average cost is meaningful only in one known quote.
 
     Buys blend weighted cost; sells keep the remaining average unchanged.
-    Mixed/unknown quotes require Stage 2 conversion or explicit reconciliation.
+    Read-time FX cost replay lives in crypto_read_service; writers only use
+    the quantity from this helper and never reference-value execution money.
     """
     with localcontext() as context:
         context.prec = 96
@@ -206,50 +206,23 @@ def _compute_position(transactions: list[CryptoTransaction]) -> tuple[Decimal, D
         return quantity, avg_price
 
 
-def _to_read(holding: CryptoHolding) -> CryptoHoldingRead:
-    with localcontext() as context:
-        context.prec = 96
-        quantity, avg_buy_price = _compute_position(holding.transactions)
-        current_price = holding.last_price if _known_price(holding) else None
-        value = current_price * quantity if current_price is not None else None
-        cost_basis = avg_buy_price * quantity if avg_buy_price is not None else None
-        quote = next(iter({t.quote_currency for t in holding.transactions}), None)
-        profit_loss = (value - cost_basis) if value is not None and cost_basis is not None and quote == holding.last_price_currency else None
-        profit_loss_percent = float(profit_loss / cost_basis * 100) if profit_loss is not None and cost_basis else None
-        return CryptoHoldingRead(
-            asset_id=holding.asset_id,
-            portfolio_id=holding.portfolio_id,
-            coingecko_id=holding.coingecko_id,
-            symbol=holding.symbol,
-            name=holding.name,
-            thumb_url=holding.thumb_url,
-            risk_level=holding.asset.risk_level,
-            network=holding.network,
-            quantity=quantity,
-            avg_buy_price=avg_buy_price,
-            cost_basis_currency=quote if avg_buy_price is not None else None,
-            current_price=current_price,
-            last_price_currency=holding.last_price_currency,
-            last_price_as_of_date=holding.last_price_as_of_date,
-            price_change_1h=holding.price_change_1h,
-            price_change_24h=holding.price_change_24h,
-            price_change_7d=holding.price_change_7d,
-            price_change_30d=holding.price_change_30d,
-            price_change_1y=holding.price_change_1y,
-            value=value,
-            cost_basis=cost_basis,
-            profit_loss=profit_loss,
-            profit_loss_percent=profit_loss_percent,
-        )
+async def _to_read(session: AsyncSession, holding: CryptoHolding) -> CryptoHoldingRead:
+    return await holding_read(holding, await reference_values(session))
 
 
-def _sort_by_invested(reads: list[CryptoHoldingRead]) -> list[CryptoHoldingRead]:
-    """Biggest cost basis (money actually put in, not current market value)
-    first, so the Holdings table reads as "what am I most committed to"
-    rather than an arbitrary/alphabetical order. A fully-exited position
-    (cost_basis None — everything's been sold) sorts last, not first: -1 can
-    never collide with a real cost basis, which is never negative."""
-    return sorted(reads, key=lambda r: r.cost_basis if r.cost_basis is not None else Decimal("-1"), reverse=True)
+async def _sync_result(session: AsyncSession, *, holdings, **values) -> CryptoSyncResult:
+    currency = holdings[0].currency if holdings else await effective_default_currency(session)
+    status = merge_statuses(*holdings)
+    return CryptoSyncResult(holdings=holdings, currency=currency, metric_status={"holdings": status},
+                            **status.model_dump(), **values)
+
+
+async def read_holdings(session: AsyncSession, portfolio_id: int | None = None) -> CryptoSyncResult:
+    # Ordinary GET is strictly a local read; POST /refresh owns provider writes.
+    state = await session.get(CryptoSyncState, 1)
+    return await _sync_result(session, synced=False,
+        last_synced_at=state.last_synced_at if state else None,
+        holdings=await holding_reads(session, await list_holdings(session, portfolio_id)))
 
 
 def _portfolio_to_read(portfolio: CryptoPortfolio) -> CryptoPortfolioRead:
@@ -397,8 +370,8 @@ async def refresh_prices(session: AsyncSession, *, force: bool, portfolio_id: in
 
     if not force and state.last_synced_at is not None and now - state.last_synced_at < AUTO_REFRESH_INTERVAL:
         holdings = await list_holdings(session, portfolio_id)
-        return CryptoSyncResult(
-            synced=False, last_synced_at=state.last_synced_at, holdings=_sort_by_invested([_to_read(h) for h in holdings])
+        return await _sync_result(session,
+            synced=False, last_synced_at=state.last_synced_at, holdings=await holding_reads(session, holdings)
         )
 
     holdings = await list_holdings(session)
@@ -408,9 +381,8 @@ async def refresh_prices(session: AsyncSession, *, force: bool, portfolio_id: in
     try:
         market_data = await _fetch_market_data([h.coingecko_id for h in holdings], quote.lower())
     except httpx.HTTPError:
-        return CryptoSyncResult(synced=False, last_synced_at=state.last_synced_at,
-            error_key="unreachable", holdings=_sort_by_invested([
-                _to_read(h) for h in holdings if portfolio_id is None or h.portfolio_id == portfolio_id]))
+        return await _sync_result(session, synced=False, last_synced_at=state.last_synced_at,
+            error_key="unreachable", holdings=await holding_reads(session, [h for h in holdings if portfolio_id is None or h.portfolio_id == portfolio_id]))
     day = date_.today()
     try:
         # Stable Asset -> Holding order; quantities are re-read after locking.
@@ -430,8 +402,8 @@ async def refresh_prices(session: AsyncSession, *, force: bool, portfolio_id: in
         await session.rollback()
         raise
     visible = await list_holdings(session, portfolio_id)
-    return CryptoSyncResult(synced=True, last_synced_at=state.last_synced_at,
-                           holdings=_sort_by_invested([_to_read(h) for h in visible]))
+    return await _sync_result(session, synced=True, last_synced_at=state.last_synced_at,
+                           holdings=await holding_reads(session, visible))
 
 
 async def create_holding(session: AsyncSession, payload: CryptoHoldingCreate) -> CryptoHoldingRead:
@@ -503,7 +475,7 @@ async def create_holding(session: AsyncSession, payload: CryptoHoldingCreate) ->
         state.last_synced_at = datetime.now(timezone.utc)
 
     await session.commit()
-    return _to_read(holding)
+    return await _to_read(session, holding)
 
 
 async def update_holding(session: AsyncSession, asset_id: int, payload: CryptoHoldingUpdate) -> CryptoHoldingRead:
@@ -514,7 +486,7 @@ async def update_holding(session: AsyncSession, asset_id: int, payload: CryptoHo
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(holding, field, value)
     await session.commit()
-    return _to_read(holding)
+    return await _to_read(session, holding)
 
 
 async def add_transaction(session: AsyncSession, asset_id: int, payload: CryptoTransactionCreate) -> CryptoHoldingRead:
@@ -544,7 +516,7 @@ async def add_transaction(session: AsyncSession, asset_id: int, payload: CryptoT
     await _cache_valuation(session, holding)
 
     await session.commit()
-    return _to_read(holding)
+    return await _to_read(session, holding)
 
 
 async def update_transaction(
@@ -590,7 +562,7 @@ async def update_transaction(
         await _cache_valuation(session, holding)
 
     await session.commit()
-    return _to_read(holding)
+    return await _to_read(session, holding)
 
 
 async def list_transactions(session: AsyncSession, asset_id: int) -> list[CryptoTransaction]:
@@ -622,77 +594,7 @@ async def delete_transaction(session: AsyncSession, transaction_id: int) -> None
 async def get_crypto_history(
     session: AsyncSession, range_key: str, portfolio_id: int | None = None
 ) -> CryptoHistoryResponse:
-    """Total crypto holdings value over time, for the History chart on the
-    Crypto tab. Same "cumulative point events, forward-filled" approach as
-    net_worth_service.py's own asset series — duplicated here rather than
-    imported, so this can't destabilize the already-tested Net Worth engine,
-    and scoped to crypto-class assets only (a deleted holding's
-    AssetValuation rows are gone via cascade, so its history naturally
-    drops out here too, same as it already does for Net Worth). Further
-    scoped to one portfolio's assets when `portfolio_id` is given, for the
-    Crypto tab's portfolio filter."""
-    today = date_.today()
-
-    asset_stmt = (
-        select(Asset.id)
-        .join(CryptoHolding, CryptoHolding.asset_id == Asset.id)
-        .where(Asset.asset_class == AssetClass.CRYPTO)
-    )
-    if portfolio_id is not None:
-        asset_stmt = asset_stmt.where(CryptoHolding.portfolio_id == portfolio_id)
-    crypto_asset_ids = set((await session.execute(asset_stmt)).scalars().all())
-    if not crypto_asset_ids:
-        return CryptoHistoryResponse(range=range_key, current=Decimal("0"), change_amount=Decimal("0"), change_percent=None, series=[])
-
-    # Read values and provenance in the same statement snapshot.
-    rows = (await session.execute(select(
-        AssetValuation.asset_id, AssetValuation.as_of_date, AssetValuation.value,
-        AssetValuation.currency, AssetValuation.currency_confirmed,
-    ).where(AssetValuation.asset_id.in_(crypto_asset_ids))
-     .order_by(AssetValuation.as_of_date))).all()
-    if any(not row.currency_confirmed or row.currency is None for row in rows):
-        raise HTTPException(409, "valuation_currency_unconfirmed")
-    currencies = {row.currency for row in rows}
-    if len(currencies) > 1:
-        raise HTTPException(409, "crypto_aggregate_conversion_required")
-    history_currency = next(iter(currencies), None)
-    valuations = [(row.asset_id, row.as_of_date, row.value) for row in rows]
-    if not valuations:
-        return CryptoHistoryResponse(range=range_key, current=Decimal("0"), change_amount=Decimal("0"), change_percent=None, series=[])
-
-    current_by_asset: dict[int, Decimal] = {}
-    events: list[tuple[date_, Decimal]] = []
-    for day, group in groupby(valuations, key=lambda row: row[1]):
-        for asset_id, _, value in group:
-            current_by_asset[asset_id] = value
-        events.append((day, sum(current_by_asset.values(), Decimal("0"))))
-
-    start = today - timedelta(days=CRYPTO_RANGE_DAYS[range_key] - 1) if range_key in CRYPTO_RANGE_DAYS else events[0][0]
-
-    points: list[CryptoHistoryPoint] = []
-    idx, n = 0, len(events)
-    running = Decimal("0")
-    day = start
-    while day <= today:
-        while idx < n and events[idx][0] <= day:
-            running = events[idx][1]
-            idx += 1
-        points.append(CryptoHistoryPoint(date=day, value=running))
-        day += timedelta(days=1)
-
-    current = points[-1].value if points else Decimal("0")
-    start_value = points[0].value if points else Decimal("0")
-    change_amount = current - start_value
-    change_percent = float(change_amount / start_value * 100) if start_value else None
-
-    return CryptoHistoryResponse(
-        range=range_key,
-        current=current,
-        change_amount=change_amount,
-        change_percent=change_percent,
-        series=points,
-        currency=history_currency,
-    )
+    return await history(session, range_key, portfolio_id, date_.today(), CRYPTO_RANGE_DAYS)
 
 
 async def _fetch_90d_change(client: httpx.AsyncClient, api_key: str, coingecko_id: str, vs_currency: str) -> float | None:

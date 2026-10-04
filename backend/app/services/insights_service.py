@@ -58,7 +58,9 @@ async def _negative_cash_flow_streak(session: AsyncSession) -> int | None:
     return streak
 
 
-def _net_worth_decline_streak(summary: NetWorthSummary) -> int:
+def _net_worth_decline_streak(summary: NetWorthSummary) -> int | None:
+    if any(not point.complete or point.value is None for point in summary.series):
+        return None
     today = date.today()
 
     # Keep the last point seen for each (year, month) — `series` is ordered
@@ -130,7 +132,7 @@ async def get_financial_alerts(session: AsyncSession) -> AlertsResponse:
     net_worth_summary = await get_net_worth_summary(session, "all")
 
     net_worth_streak = _net_worth_decline_streak(net_worth_summary)
-    if net_worth_streak >= settings.net_worth_decline_threshold_months:
+    if net_worth_streak is not None and net_worth_streak >= settings.net_worth_decline_threshold_months:
         alerts.append(
             FinancialAlert(
                 key="net_worth_decline_streak",
@@ -139,8 +141,9 @@ async def get_financial_alerts(session: AsyncSession) -> AlertsResponse:
             )
         )
 
-    risky_percent = sum(tier.percent for tier in net_worth_summary.risk_levels if tier.risk_level != "low")
-    if risky_percent > settings.risky_allocation_threshold_percent:
+    risky_percent = (sum(tier.percent for tier in net_worth_summary.risk_levels if tier.risk_level != "low")
+                     if net_worth_summary.metric_status["risk_levels"].complete else None)
+    if risky_percent is not None and risky_percent > settings.risky_allocation_threshold_percent:
         alerts.append(
             FinancialAlert(
                 key="risky_allocation_exceeded",

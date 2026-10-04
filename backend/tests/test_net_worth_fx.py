@@ -206,7 +206,7 @@ async def test_unresolved_is_date_scoped_and_reconciliation_restores(client, tes
     assert values(await summary(client)) == [Decimal(100)] * 3
 
 
-async def test_asset_native_value_forward_fills_but_fx_revalues(client, test_sessionmaker):
+async def test_asset_observation_value_and_fx_forward_fill_together(client, test_sessionmaker):
     id_ = await asset(client)
     await rate(test_sessionmaker, "EUR", "USD", "2")
     await rate(test_sessionmaker, "EUR", "USD", "3", JAN2)
@@ -215,7 +215,7 @@ async def test_asset_native_value_forward_fills_but_fx_revalues(client, test_ses
     response = await client.post(f"/assets/{id_}/valuations", json={"value": "9000", "as_of_date": "2026-01-04"})
     assert response.status_code == 200
     body = await summary(client)
-    assert values(body) == [Decimal(2000), Decimal(3000), Decimal(6000)]
+    assert values(body) == [Decimal(2000), Decimal(2000), Decimal(6000)]
     assert Decimal(body["current"]) == 6000
 
 
@@ -370,8 +370,9 @@ async def test_missing_rate_is_cached_and_deduplicated_per_point(client, monkeyp
     monkeypatch.setattr(nw, "resolve_rate", spy)
     body = await summary(client)
     assert spy.await_count == 3
-    assert all(len(point["missing_rates"]) == 1 for point in body["series"])
-    assert len(body["missing_rates"]) == 1
+    # Cash uses chart dates; the valuation retains its Jan 1 request date.
+    assert [len(point["missing_rates"]) for point in body["series"]] == [1, 2, 2]
+    assert len(body["missing_rates"]) == 2
 
 
 async def test_future_unresolved_transfer_does_not_invalidate_today(client, test_sessionmaker):

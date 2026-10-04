@@ -146,7 +146,7 @@ async def test_daily_refresh_atomic_conflict_and_next_day(client, test_sessionma
     assert asset["currency"] == "USD" and asset["valuation_currency"] == "VND"
     assert asset["valuation_currency_confirmed"] is True
     assert requested == ["usd", "usd", "vnd", "vnd"]
-    assert (await client.get("/crypto/history")).status_code == 409
+    assert (await client.get("/crypto/history")).status_code == 200
 
 
 @pytest.mark.parametrize("legacy", [False, True])
@@ -167,7 +167,7 @@ async def test_manual_daily_provenance_conflicts(client, test_sessionmaker, lega
     assert asset["valuation_currency"] == (None if legacy else "USD")
     assert asset["valuation_currency_confirmed"] is (not legacy)
     summary = (await client.get("/net-worth/summary")).json()
-    assert summary["current"] is None and not summary["complete"]
+    assert (summary["current"] is None and not summary["complete"]) if legacy else Decimal(summary["current"]) == 500000
 
 
 async def test_legacy_refresh_conflict_and_backup_unknown(client, test_sessionmaker, monkeypatch):
@@ -395,11 +395,10 @@ async def test_unknown_and_mixed_quotes_never_become_known_aggregates(client, te
     from app.services import fx_service
     from app.services.fx_provider import FxProvider
     forbidden = AsyncMock(side_effect=AssertionError("Crypto provenance must not use reference FX"))
-    monkeypatch.setattr(fx_service, "resolve_rate", forbidden)
     monkeypatch.setattr(FxProvider, "fetch_observations", forbidden)
     engine = test_sessionmaker.kw["bind"].sync_engine
     def inspect(conn, cursor, statement, parameters, context, executemany):
-        assert "fx_rates" not in statement.lower()
+        assert not ("fx_rates" in statement.lower() and statement.lstrip().lower().startswith(("insert", "update", "delete")))
     event.listen(engine, "before_cursor_execute", inspect)
     try:
         monkeypatch.setattr(crypto, "_fetch_market_data", _fake_fetch({"bitcoin": _point("50000")}))
@@ -415,7 +414,7 @@ async def test_unknown_and_mixed_quotes_never_become_known_aggregates(client, te
         result = (await client.get("/crypto/holdings")).json()["holdings"][0]
         assert result["current_price"] is None and result["value"] is None
         history = await client.get("/crypto/history")
-        assert history.status_code == 409 and history.json()["detail"] == "valuation_currency_unconfirmed"
+        assert history.status_code == 200 and {"code": "valuation_currency_unconfirmed"} in history.json()["data_issues"]
     finally:
         event.remove(engine, "before_cursor_execute", inspect)
     forbidden.assert_not_called()

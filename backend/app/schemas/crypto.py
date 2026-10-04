@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.currency import CurrencyCode, CurrencyUpdate
+from app.schemas.money import FinancialDataStatus, FinancialResponseStatus
 from app.models.enums import CryptoTransactionType, RiskLevel
 
 
@@ -94,7 +95,7 @@ class CryptoHoldingUpdate(BaseModel):
     network: str | None = Field(default=None, max_length=50)
 
 
-class CryptoHoldingRead(BaseModel):
+class CryptoHoldingRead(FinancialResponseStatus):
     asset_id: int
     portfolio_id: int
     coingecko_id: str
@@ -129,8 +130,8 @@ class CryptoHoldingRead(BaseModel):
     # services/crypto_service.py's module docstring).
     price_change_1y: Decimal | None
 
-    # All derived from the above: value = current_price * quantity,
-    # cost_basis = avg_buy_price * quantity, profit_loss = value - cost_basis.
+    # current_price stays in last_price_currency. Derived value, average, cost
+    # and P&L use response.currency with dated reference FX.
     value: Decimal | None
     cost_basis: Decimal | None
     profit_loss: Decimal | None
@@ -156,14 +157,10 @@ class CryptoPerformanceResponse(BaseModel):
     items: list[CryptoPerformancePoint]
 
 
-class CryptoSyncResult(BaseModel):
-    # False when the lazy daily check ran but the 24h window hadn't
-    # elapsed yet (nothing called CoinGecko this time, error_key is None),
-    # OR when a refresh was attempted but CoinGecko couldn't be reached
-    # (error_key is set) — check error_key to tell the two apart. Either
-    # way `holdings` still carries the best data on hand, never blocked by
-    # an external outage.
-    #
+class CryptoSyncResult(FinancialResponseStatus):
+    # Ordinary GET reads cached prices and reports synced=False. Only explicit
+    # refresh/seed actions contact CoinGecko; provider errors preserve the cache.
+    # Response completeness describes converted holding metrics independently.
     # A key, not a message string: the frontend translates it (RU/EN), same
     # key+params convention as FinancialAlert/AdviceItem — a raw English
     # sentence here would silently break the app's bilingual UI.
@@ -180,20 +177,19 @@ class CryptoSearchResult(BaseModel):
     thumb_url: str | None
 
 
-class CryptoHistoryPoint(BaseModel):
+class CryptoHistoryPoint(FinancialDataStatus):
     date: date_
-    value: Decimal
+    value: Decimal | None
 
 
-class CryptoHistoryResponse(BaseModel):
+class CryptoHistoryResponse(FinancialResponseStatus):
     """Total crypto holdings value over time — same "cumulative point
     events, forward-filled" shape as NetWorthSummary's own series, but
     scoped to crypto-class assets only (see services/crypto_service.py's
     get_crypto_history). Powers the History chart on the Crypto tab."""
 
-    currency: str | None = None
     range: str
-    current: Decimal
-    change_amount: Decimal
+    current: Decimal | None
+    change_amount: Decimal | None
     change_percent: float | None
     series: list[CryptoHistoryPoint]

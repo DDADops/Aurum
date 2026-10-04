@@ -781,3 +781,102 @@ cover unlocked HTTP, state mutation during HTTP, locked write phase, native
 currency mutation vs transaction/manual valuation writers, daily same/different
 quote writers and two in-flight refreshes. FX resolver/provider/SQL are forbidden
 in the dedicated provenance test.
+
+### Crypto Stage 2: dated reference FX reads
+
+No migration or persisted-field change; Alembic head stays e91b7a42c603.
+Stage 1 daily uniqueness, quote snapshots, same-day provenance conflicts,
+parent-first locks, unlocked provider HTTP and atomic refresh writes remain.
+The explicit Stage 2 offline-GET requirement removes lazy provider refresh from
+GET /crypto/holdings. POST /crypto/refresh and create-holding seed remain the
+provider-write entrypoints. Their response serialization now uses the same
+reference-FX read layer as GET, after their write transaction commits.
+
+Caller audit:
+- /crypto/portfolios and /crypto/holdings/{id}/transactions return metadata or
+  authored transaction prices; transaction prices stay in quote_currency.
+- GET /crypto/holdings reads cache + journal, scoped by optional portfolio_id.
+  Its existing CryptoSyncResult now includes target currency and completeness.
+- Holdings returned by create/edit/refresh use the identical read arithmetic.
+- /crypto/history is a target-currency valuation-event aggregate, HTTP 200 even
+  when FX/provenance is missing. Point and metric statuses expose incompleteness.
+- /crypto/performance/90d remains explicit provider percentage data in one quote;
+  no reference FX is needed. Coin search is also an explicit provider endpoint.
+  Neither endpoint is an offline monetary aggregate GET.
+- _compute_position remains the Stage 1 writer/oversell/90d quantity helper.
+  Its average is no longer used by monetary read responses. Read cost replay is
+  crypto_read_service.position; it cannot alter execution values or holdings.
+- There is no backend portfolio monetary-total field. CryptoStatsRow and
+  CryptoPage currently sum holding fields on the frontend; no frontend changes
+  are made here. They must adopt status/null handling in the frontend stage.
+- Net Worth is the only generic AssetValuation aggregation engine; its breakdown,
+  capital-role totals and risk/allocation views use the same converted values.
+  monthly_cash_flow remains separate native Asset money converted as of today.
+- Insights directly consumes Net Worth's series/risk view. It now skips unknown
+  decline comparisons and unavailable risk percentages instead of comparing
+  None or interpreting an empty allocation list as zero risk. Advice has no
+  direct crypto/Net Worth call. Full Insights/Advice and their transitional
+  capital_status guard remain deferred. Dashboard/reports have no additional
+  direct crypto valuation writer or aggregate engine.
+
+Target for all derived crypto metrics is current AppSettings.currency; Net Worth
+uses its existing settings/base target. All monetary arithmetic uses Decimal,
+96-digit local contexts and ROUND_HALF_EVEN; only dimensionless percentage wire
+fields become floats. No execution/reference-rate persistence or provider FX
+request is introduced. Base changes change responses, not stored provenance.
+
+Weighted remaining cost algorithm, ordered by (date,id):
+- BUY: quantity * price_per_unit in quote_currency converts on transaction.date;
+  add converted cost and quantity to the position.
+- SELL: reduce quantity and reduce cost proportionally, preserving average cost;
+  sell quote/price do not establish remaining cost and need no conversion.
+- An unknown relevant BUY quote yields
+  crypto_transaction_quote_currency_unconfirmed; missing FX keeps quantity
+  known but makes the entire remaining cost/average/P&L unavailable.
+- Closing to zero clears all earlier cost issues. Later buys start afresh. The
+  existing oversell zero clamp is preserved; FIFO/LIFO/realized P&L are not added.
+  Exited positions retain API-compatible avg_buy_price=None, cost_basis=None.
+
+Current_price remains the raw provider-native price in last_price_currency;
+last_price_as_of_date stays visible. value converts quantity * last_price on
+that cache date, not today. Average/cost/value/P&L are in response.currency;
+cost_basis_currency also explicitly names the target. Cost and value have
+independent metric_status entries; P&L requires both. Missing cache metadata
+produces crypto_price_provenance_unconfirmed, never a guessed MissingRate.
+
+Shared ValuationHistory selects the latest observation <= chart day. It requires
+currency_confirmed and currency, then converts using that observation's own
+as_of_date. It carries the resulting value forward without chart-date FX
+revaluation. The same path handles crypto AND non-crypto in Net Worth; the
+blanket linked-crypto exclusion is removed. Unknown rows yield
+valuation_currency_unconfirmed; missing histories yield valuation_missing.
+Before an asset's first dated observation it contributes zero, as before.
+Native cash stocks still use FX on each chart date; this contract is unchanged.
+
+Crypto history returns per-point complete/missing_rates/data_issues. Summary
+complete describes the whole series; metric_status independently describes
+current, change endpoints and series. Net Worth retains its established
+current-day top-level status and adds explicit series metric status. An unknown
+intermediate point need not invalidate known endpoints. No partial total is
+returned as a complete value. Known mixed-currency daily observations are normal.
+
+ReferenceValues caches ResolvedRate and MissingRate per request using
+(source,target,date,max_age_days). It uses the existing local resolve_rate and
+convert functions, with direct/inverse/bridge, staleness and precision failures
+unchanged. Zero known money bypasses FX; missing provenance does not. One cache
+is shared across all holdings in a response or across an entire history request.
+No fx_rates writes or provider requests occur during aggregate conversion.
+
+Holdings sort by converted target cost basis descending, complete non-NULL
+values first; incomplete/exited None costs follow, with asset_id as stable
+secondary key. Decimal.copy_negate avoids ambient-context rounding in sorting.
+No cross-currency nominal comparison or float money sorting is performed.
+
+Coverage includes mixed USD/RUB buys, irrelevant SELL quote, close/reopen,
+independent cost/market status, cache-date conversion, observation-date carry
+forward, known crypto inclusion, unknown points, direct/inverse/bridge/weekend/
+stale/future/precision failures, zero bypass, cached missing and resolved FX,
+base changes without persisted mutation, low ambient precision, deterministic
+sorting, offline GET SQL/network guards and dimensionless 90d behavior.
+Existing Stage 1 migration/concurrency/write tests remain regression coverage;
+only assertions about deliberately replaced read behavior are updated.

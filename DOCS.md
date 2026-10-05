@@ -760,6 +760,94 @@ if you're consuming this programmatically rather than trying to parse rendered s
 { "items": [ { "key": "rising_category", "tone": "warning", "params": { "category": "Dining", "percent": 34.2 } } ] }
 ```
 
+### Multicurrency rule dependencies and completeness
+
+Both responses retain `currency`, `complete`, `missing_rates`, `data_issues`, and
+`metric_status`. Metric keys are the rule keys below. A complete rule with no
+item is a known negative/not-applicable result; an incomplete rule with no item
+is unknown, **not** evidence that no problem exists. The response merges only
+statuses of evaluated rule dependencies, deduplicating the original reasons.
+An incomplete rule does not remove other complete rules' items. Top-level
+`complete=false` therefore describes partial evaluation, not an unusable list.
+
+| Alert / use | Authoritative input and denomination | Required status and unavailable behavior |
+|---|---|---|
+| `negative_cash_flow_streak`: compare net to zero, count streak, compare months threshold | Cash Flow monthly `net`, already converted to response currency at transaction dates; income/expense transactions, excludes transfers | Only each examined point's `metric_status.net`; NULL or incomplete makes this rule unknown. No numeric comparison of unknown points. |
+| `net_worth_decline_streak`: compare historical values, count streak, compare months threshold | Net Worth month-end series, already converted to response currency at observation dates; native account legs plus dated asset/crypto valuations | Only examined month-end point statuses; NULL/incomplete makes the rule unknown. Other series points and current allocation do not gate it. |
+| `risky_allocation_exceeded`: allocation percentage and threshold | Net Worth `risk_levels.total_value` in one response currency, including converted cash/assets/crypto | `metric_status.risk_levels`. Incomplete empty tiers are unavailable, not 0%. Complete tiers are summed as Decimal to derive the original non-low share; zero denominator gives the existing 0% result. Negative denominators retain existing semantics. |
+| `budget_exceeded`: count overspent budgets | BudgetStatus `is_over_budget`, already computed from converted spending versus nominal limit in **each Budget.currency** | Evaluate each complete row with non-NULL verdict independently. Emit count of known overspent budgets even if other budgets are unknown; rule/root status then remains incomplete. Count is confirmed overspends, not a claim about unknown budgets. No cross-budget monetary sum. |
+| `idle_cash`: balance/amount threshold, activity/days threshold, count | Native balance service: exact source debits and destination credits from Transactions; Account.currency. Threshold amount is in settings/response currency | All eligible accounts must have known balances and either no history or the same currency as the threshold. Foreign accounts with history disable only this rule (`idle_cash_balance_unavailable`); unknown transfer credit propagates `transfer_amount_unresolved`. No ad-hoc FX conversion. |
+
+| Advice / use | Authoritative input and denomination | Required status and unavailable behavior |
+|---|---|---|
+| `rising_category`: trailing average, percentage, ranking, money params | Reports' converted category contributions in response currency, dated expense conversions; current month plus preceding three months for current categories | Every contributing current category and relevant trailing contribution must be complete/non-NULL. Unknown makes this ranking unavailable; categories absent from a complete period have genuinely zero spending. Params `current`, `average` are Decimal strings plus `currency`; percent is calculated in Decimal then rounded. |
+| `unbudgeted_top_category`: amount ranking and money param | Same Reports contributions, current month; Budget.category_id metadata excludes budgeted categories | Only unbudgeted candidate contributions must be complete/non-NULL. Unknown spending in budgeted categories does not block this rule. Params `amount` is a Decimal string plus `currency`. |
+| `savings_rate_trend`: net/income percentages and percentage-point difference | Dashboard current and preceding month `net` and `real_income`, already converted to response currency at transaction dates | Both metrics in both months must be complete/non-NULL. Known nonpositive income retains the existing no-advice behavior. Decimal arithmetic precedes rounded dimensionless params `rate`, `diff`. No dependence on Dashboard capital or transfer metrics. |
+
+Caller audit:
+
+- Routes `/insights/alerts` and `/advice` only delegate to these services; response
+  schemas inherit `FinancialResponseStatus`. Alert params remain dimensionless
+  integers (months, count, percent, threshold, days); they need no new currency param.
+- Settings supplies base currency and thresholds; existing settings initialization
+  is unchanged. No new writes are introduced.
+- Cash Flow and Dashboard own dated flow conversion through the reference FX DB
+  resolver. Reports owns expense conversion/allocation through `_DatedValues`
+  and `_category_contributions`; Advice reuses those outputs, not a new FX engine.
+  Advice's direct Transaction query selects IDs/date/category metadata only,
+  never raw monetary fields. It preserves the original direct-category scope:
+  split-only transactions remain excluded; parents are not rolled up; an exact
+  category budget match excludes that category. Expanding this is separate product work.
+- Net Worth owns account/asset/crypto valuation conversion and independent current,
+  series, risk and capital-role statuses. Insights does not read Asset.value,
+  AssetValuation.value, crypto `current_price`, costs or holding rows directly.
+  Crypto missing quote/valuation provenance is propagated only through dependent
+  Net Worth metrics. Missing cost basis alone is not a risk-value dependency.
+- Budget owns per-budget spending conversion/comparison. Budget limits/spending
+  are never summed here. Goal and GoalContribution have no callers in these rules;
+  no Goal advice was added and different Goal.currency values are never combined.
+- Asset `monthly_cash_flow` is converted by Net Worth's capital-role calculation;
+  none of these rules consumes capital roles or monthly_cash_flow. Its independent
+  incompleteness must not block risk or series conclusions.
+- The only direct monetary reader retained is native account balance for idle cash.
+  It knows incoming/outgoing transfer legs and propagates unknown destination amounts.
+  A missing balance entry means an account with no monetary history, legitimately zero.
+  Converted per-account idle-cash balances remain deferred until an authoritative
+  service exposes that contract.
+- There is no independent non-monetary Advice generator and no Advice-to-Alerts
+  dependency. No new recommendations were added.
+
+Streak semantics: Cash Flow examines up to 24 fully elapsed calendar months,
+newest first. A known nonnegative month terminates the streak; older points are
+irrelevant. An unknown encountered before that terminating month makes the exact
+streak length unknown, even if some recent negative months are known. Net Worth
+keeps the last observed point per month, omits the current month, and scans
+backward until the first non-decrease. Only those endpoints are required; older
+unknown points beyond the break and superseded intramonth points are irrelevant.
+Missing whole months retain the existing observed-month comparison semantics.
+An unknown selected endpoint is conservative unknown, including a lone unknown
+endpoint. Zero/one known historical point gives zero declines.
+
+Before this integration, whole-history currency gates suppressed unrelated
+rules; Advice raw-summed Transaction.amount and cast monetary params to float.
+The minimal series/risk/idle guards prevented some NULL comparisons but could
+return a misleading empty list or suppress independent alerts. Now required NULLs
+cannot become zero, and every suppressed rule has an incomplete metric status.
+Missing/stale/precision FX stays in `missing_rates`; unknown monetary provenance
+stays in `data_issues`, using the existing merge/dedup contract.
+
+All monetary arithmetic here uses local Decimal precision 96. Ordinary GETs use
+local authoritative reads only: no FX sync, provider HTTP, price refresh, or
+monetary INSERT/UPDATE/DELETE. Integration tests intercept provider/HTTP entry
+points and SQL statements and compare persisted native rows before/after base
+currency changes. No migration or backup format change is part of this stage.
+
+Frontend follow-up: use per-rule statuses to distinguish unavailable from clean
+results, and format monetary Advice params with their explicit `currency`.
+Decimal strings remain compatible with the current `Number(params.amount)` /
+`Number(params.current)` formatting path; frontend code and translations are
+unchanged here.
+
 ## Settings
 
 App-wide configuration: display currency and every alert threshold used by `/insights/alerts`.

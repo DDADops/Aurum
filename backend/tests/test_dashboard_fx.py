@@ -264,7 +264,11 @@ async def test_dashboard_callers_suppress_unknown_operands(test_sessionmaker, mo
         real_income=Decimal(100), spent=None, net=None, transferred_out=Decimal(0),
         spending_by_category=[], metric_status={"net": FinancialDataStatus(complete=False)},
     )
-    monkeypatch.setattr(insights_service, "get_dashboard_summary", AsyncMock(return_value=incomplete))
+    from app.schemas.cash_flow import CashFlowResponse
+    monkeypatch.setattr(insights_service, "get_cash_flow", AsyncMock(return_value=CashFlowResponse(
+        currency="USD", start_date=None, end_date=None, points=[],
+        total_income=None, total_expense=None, total_net=None, complete=False,
+    )))
     monkeypatch.setattr(advice_service, "get_dashboard_summary", AsyncMock(return_value=incomplete))
     async with test_sessionmaker() as session:
         assert await insights_service._negative_cash_flow_streak(session) is None

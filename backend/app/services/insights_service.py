@@ -12,7 +12,7 @@ looks at the CURRENT, still-in-progress month, since the whole point is to
 catch overspending while there's still time to react.
 """
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,15 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.account import Account
 from app.models.enums import AccountType
 from app.schemas.insights import AlertsResponse, FinancialAlert
-from app.schemas.money import FinancialDataIssue
-from app.schemas.net_worth import NetWorthSummary
+from app.schemas.money import FinancialDataIssue, FinancialDataStatus
+from app.schemas.net_worth import NetWorthPoint, NetWorthSummary
 from app.services.budget_service import get_budget_status
-from app.services.dashboard_service import get_dashboard_summary
+from app.services.cash_flow_service import get_cash_flow
+from app.services.financial_data_service import merge_statuses
 from app.services.native_balance_service import NativeBalance, account_balances
 from app.services.net_worth_service import get_net_worth_summary
 from app.services.settings_service import get_or_create_app_settings
-
-from app.services.financial_data_service import capital_status, transaction_status, merge_statuses
 
 MAX_LOOKBACK_MONTHS = 24
 
@@ -42,52 +41,63 @@ def _previous_month(year: int, month: int) -> tuple[int, int]:
     return (year - 1, 12) if month == 1 else (year, month - 1)
 
 
-async def _negative_cash_flow_streak(session: AsyncSession) -> int | None:
+async def _negative_cash_flow_streak(
+    session: AsyncSession, statuses: list[FinancialDataStatus] | None = None,
+) -> int | None:
+    statuses = statuses if statuses is not None else []
     today = date.today()
+    year, month = today.year, today.month
+    for _ in range(MAX_LOOKBACK_MONTHS):
+        year, month = _previous_month(year, month)
+    flow = await get_cash_flow(session, date(year, month, 1), today.replace(day=1) - timedelta(days=1))
+    points = {(point.year, point.month): point for point in flow.points}
     year, month = _previous_month(today.year, today.month)
-
     streak = 0
     for _ in range(MAX_LOOKBACK_MONTHS):
-        summary = await get_dashboard_summary(session, year, month)
-        if summary.net is None or not summary.metric_status.get("net", summary).complete:
+        point = points.get((year, month))
+        status = (merge_statuses(point.metric_status.get("net", point),
+                                FinancialDataStatus(complete=point.net is not None))
+                  if point is not None else FinancialDataStatus(complete=False))
+        statuses.append(status)
+        if not status.complete:
             return None
-        if summary.net >= 0:
+        if point.net >= 0:
             break
         streak += 1
         year, month = _previous_month(year, month)
     return streak
 
 
-def _net_worth_decline_streak(summary: NetWorthSummary) -> int | None:
-    if any(not point.complete or point.value is None for point in summary.series):
-        return None
+def _net_worth_decline_streak(
+    summary: NetWorthSummary, statuses: list[FinancialDataStatus] | None = None,
+) -> int | None:
+    statuses = statuses if statuses is not None else []
     today = date.today()
-
-    # Keep the last point seen for each (year, month) — `series` is ordered
-    # ascending by date, so that's the month-end value — and drop the
-    # current month, which is always partial.
-    month_end: dict[tuple[int, int], Decimal] = {}
+    # Only month-end points participate; current month is still partial.
+    month_end: dict[tuple[int, int], NetWorthPoint] = {}
     for point in summary.series:
         if (point.date.year, point.date.month) == (today.year, today.month):
             continue
-        month_end[(point.date.year, point.date.month)] = point.value
-
-    ordered_months = sorted(month_end)
-    if len(ordered_months) < 2:
-        return 0
-
+        month_end[(point.date.year, point.date.month)] = point
+    points = [month_end[key] for key in sorted(month_end, reverse=True)]
     streak = 0
-    for i in range(len(ordered_months) - 1, 0, -1):
-        if month_end[ordered_months[i]] < month_end[ordered_months[i - 1]]:
+    for index, point in enumerate(points):
+        status = merge_statuses(point, FinancialDataStatus(complete=point.value is not None))
+        statuses.append(status)
+        if not status.complete:
+            return None
+        if index:
+            if points[index - 1].value >= point.value:
+                break
             streak += 1
-        else:
-            break
     return streak
 
 
 async def _idle_cash_account_count(
     session: AsyncSession, threshold_amount: Decimal, threshold_days: int, *, currency: str,
+    statuses: list[FinancialDataStatus] | None = None,
 ) -> int | None:
+    statuses = statuses if statuses is not None else []
     eligible = (await session.execute(
         select(Account.id, Account.currency).where(
             Account.is_archived.is_(False), Account.type.in_(_IDLE_CASH_ACCOUNT_TYPES),
@@ -100,26 +110,31 @@ async def _idle_cash_account_count(
     count = 0
     for account_id, native_currency in eligible:
         state = balances.get(account_id, NativeBalance())
-        # Thresholds currently use settings currency. Conversion / explicit
-        # threshold denomination belongs to the later FX insights work.
-        if state.balance is None or (state.has_monetary_history and native_currency != currency):
-            return None
+        # No authoritative per-account converted balance is exposed yet.
+        # A native balance cannot be compared with a foreign threshold.
+        if state.balance is None:
+            statuses.append(FinancialDataStatus(complete=False, data_issues=[
+                FinancialDataIssue(code="transfer_amount_unresolved"),
+            ]))
+            continue
+        if state.has_monetary_history and native_currency != currency:
+            statuses.append(FinancialDataStatus(complete=False, data_issues=[
+                FinancialDataIssue(code="idle_cash_balance_unavailable"),
+            ]))
+            continue
         if state.balance >= threshold_amount and (state.last_activity or cutoff) <= cutoff:
             count += 1
-    return count
+    return count if all(status.complete for status in statuses) else None
 
 
 async def get_financial_alerts(session: AsyncSession) -> AlertsResponse:
     settings = await get_or_create_app_settings(session)
-    status = merge_statuses(
-        await capital_status(session, settings.currency),
-        await transaction_status(session, settings.currency),
-    )
-    if not status.complete:
-        return AlertsResponse(currency=settings.currency, **status.model_dump(), alerts=[])
+    metrics: dict[str, FinancialDataStatus] = {}
     alerts: list[FinancialAlert] = []
 
-    cash_flow_streak = await _negative_cash_flow_streak(session)
+    inputs: list[FinancialDataStatus] = []
+    cash_flow_streak = await _negative_cash_flow_streak(session, inputs)
+    metrics["negative_cash_flow_streak"] = merge_statuses(*inputs)
     if cash_flow_streak is not None and cash_flow_streak >= settings.negative_cash_flow_threshold_months:
         alerts.append(
             FinancialAlert(
@@ -131,7 +146,9 @@ async def get_financial_alerts(session: AsyncSession) -> AlertsResponse:
 
     net_worth_summary = await get_net_worth_summary(session, "all")
 
-    net_worth_streak = _net_worth_decline_streak(net_worth_summary)
+    inputs = []
+    net_worth_streak = _net_worth_decline_streak(net_worth_summary, inputs)
+    metrics["net_worth_decline_streak"] = merge_statuses(*inputs)
     if net_worth_streak is not None and net_worth_streak >= settings.net_worth_decline_threshold_months:
         alerts.append(
             FinancialAlert(
@@ -141,8 +158,18 @@ async def get_financial_alerts(session: AsyncSession) -> AlertsResponse:
             )
         )
 
-    risky_percent = (sum(tier.percent for tier in net_worth_summary.risk_levels if tier.risk_level != "low")
-                     if net_worth_summary.metric_status["risk_levels"].complete else None)
+    metrics["risky_allocation_exceeded"] = merge_statuses(
+        net_worth_summary.metric_status.get("risk_levels", net_worth_summary),
+    )
+    risky_percent = None
+    if metrics["risky_allocation_exceeded"].complete:
+        with localcontext() as context:
+            context.prec = 96
+            context.rounding = ROUND_HALF_EVEN
+            total = sum((tier.total_value for tier in net_worth_summary.risk_levels), Decimal(0))
+            risky = sum((tier.total_value for tier in net_worth_summary.risk_levels
+                         if tier.risk_level != "low"), Decimal(0))
+            risky_percent = risky / total * 100 if total != 0 else Decimal(0)
     if risky_percent is not None and risky_percent > settings.risky_allocation_threshold_percent:
         alerts.append(
             FinancialAlert(
@@ -154,10 +181,11 @@ async def get_financial_alerts(session: AsyncSession) -> AlertsResponse:
 
     today = date.today()
     budget_status = await get_budget_status(session, today.year, today.month)
-    if not budget_status.complete:
-        # A missing budget-target rate must not become a definitive zero count.
-        return AlertsResponse(currency=settings.currency, **merge_statuses(budget_status).model_dump(), alerts=[])
-    over_budget_count = sum(1 for item in budget_status.items if item.is_over_budget)
+    budget_inputs = [merge_statuses(item, FinancialDataStatus(complete=item.is_over_budget is not None))
+                     for item in budget_status.items]
+    metrics["budget_exceeded"] = merge_statuses(*budget_inputs)
+    over_budget_count = sum(1 for item, status in zip(budget_status.items, budget_inputs)
+                            if status.complete and item.is_over_budget)
     if over_budget_count > 0:
         alerts.append(
             FinancialAlert(
@@ -167,14 +195,13 @@ async def get_financial_alerts(session: AsyncSession) -> AlertsResponse:
             )
         )
 
+    inputs = []
     idle_cash_count = await _idle_cash_account_count(
-        session, settings.idle_cash_threshold_amount, settings.idle_cash_threshold_days, currency=settings.currency
+        session, settings.idle_cash_threshold_amount, settings.idle_cash_threshold_days, currency=settings.currency,
+        statuses=inputs,
     )
-    if idle_cash_count is None:
-        return AlertsResponse(currency=settings.currency, complete=False, alerts=[], data_issues=[
-            FinancialDataIssue(code="idle_cash_balance_unavailable"),
-        ])
-    if idle_cash_count > 0:
+    metrics["idle_cash"] = merge_statuses(*inputs)
+    if idle_cash_count is not None and idle_cash_count > 0:
         alerts.append(
             FinancialAlert(
                 key="idle_cash",
@@ -183,4 +210,5 @@ async def get_financial_alerts(session: AsyncSession) -> AlertsResponse:
             )
         )
 
-    return AlertsResponse(currency=settings.currency, alerts=alerts)
+    return AlertsResponse(currency=settings.currency, alerts=alerts, metric_status=metrics,
+                          **merge_statuses(*metrics.values()).model_dump())

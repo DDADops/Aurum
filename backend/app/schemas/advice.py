@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel
@@ -9,8 +10,9 @@ class AdviceItem(BaseModel):
     key: str
     tone: Literal["positive", "neutral", "warning"]
     # Frontend-translated by key — same key+params pattern as FinancialAlert,
-    # extended to allow string params (category names) alongside numbers.
-    params: dict[str, str | int | float]
+    # Decimal money serializes as strings and carries an explicit currency
+    # param; percentages/counts stay dimensionless numbers.
+    params: dict[str, str | int | Decimal | float]
 
 
 class AdviceResponse(FinancialResponseStatus):

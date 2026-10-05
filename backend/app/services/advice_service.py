@@ -8,19 +8,21 @@ warnings, and not something the user needs to act on immediately.
 import calendar
 from collections import defaultdict
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.budget import Budget
 from app.models.category import Category
-from app.models.enums import TransactionType
+from app.models.enums import CategoryKind, TransactionType
 from app.models.transaction import Transaction
 from app.schemas.advice import AdviceItem, AdviceResponse
+from app.schemas.money import FinancialDataStatus
 from app.services.dashboard_service import get_dashboard_summary
+from app.services.financial_data_service import merge_statuses
+from app.services.reports_service import _DatedValues, _category_contributions
 from app.services.settings_service import get_or_create_app_settings
-from app.services.financial_data_service import transaction_status
 
 TRAILING_MONTHS = 3
 RISING_CATEGORY_THRESHOLD_PERCENT = 25
@@ -36,25 +38,45 @@ def _previous_month(year: int, month: int) -> tuple[int, int]:
     return (year - 1, 12) if month == 1 else (year, month - 1)
 
 
-async def _category_expense_totals(session: AsyncSession, year: int, month: int) -> dict[int, Decimal]:
+async def _category_expense_totals(
+    session: AsyncSession, year: int, month: int, statuses: list[FinancialDataStatus],
+    category_ids: set[int] | None = None, excluded_category_ids: set[int] | None = None,
+) -> dict[int, Decimal] | None:
     start, end = _month_bounds(year, month)
-    stmt = (
-        select(Transaction.category_id, func.sum(Transaction.amount))
-        .where(
-            Transaction.type == TransactionType.EXPENSE,
-            Transaction.category_id.is_not(None),
-            Transaction.date >= start,
-            Transaction.date <= end,
+    # Preserve the existing direct-category scope (split-only transactions were
+    # not inputs to these rules). Read IDs only; Reports owns money conversion.
+    direct_ids = set((await session.scalars(select(Transaction.id).where(
+        Transaction.type == TransactionType.EXPENSE, Transaction.category_id.is_not(None),
+        Transaction.date >= start, Transaction.date <= end,
+    ))).all())
+    settings = await get_or_create_app_settings(session)
+    with localcontext() as context:
+        context.prec = 96
+        context.rounding = ROUND_HALF_EVEN
+        contributions = await _category_contributions(
+            session, _DatedValues(session, settings.currency, settings.fx_max_age_days),
+            CategoryKind.EXPENSE, start, end, category_ids,
         )
-        .group_by(Transaction.category_id)
-    )
-    return {row[0]: row[1] for row in (await session.execute(stmt)).all()}
+        contributions = [item for item in contributions if item.transaction_id in direct_ids
+                         and item.category_id not in (excluded_category_ids or set())]
+        status = merge_statuses(*(merge_statuses(item.status, FinancialDataStatus(complete=item.amount is not None))
+                                  for item in contributions))
+        statuses.append(status)
+        if not status.complete:
+            return None
+        totals: dict[int, Decimal] = defaultdict(Decimal)
+        for item in contributions:
+            totals[item.category_id] += item.amount
+        return dict(totals)
 
 
-async def _rising_category_advice(session: AsyncSession, year: int, month: int) -> AdviceItem | None:
+async def _rising_category_advice(
+    session: AsyncSession, year: int, month: int, statuses: list[FinancialDataStatus] | None = None,
+) -> AdviceItem | None:
     """The expense category furthest above its own trailing-3-month average,
     if that's at least RISING_CATEGORY_THRESHOLD_PERCENT higher."""
-    current_totals = await _category_expense_totals(session, year, month)
+    statuses = statuses if statuses is not None else []
+    current_totals = await _category_expense_totals(session, year, month, statuses)
     if not current_totals:
         return None
 
@@ -62,15 +84,18 @@ async def _rising_category_advice(session: AsyncSession, year: int, month: int) 
     y, m = year, month
     for _ in range(TRAILING_MONTHS):
         y, m = _previous_month(y, m)
-        for cat_id, amount in (await _category_expense_totals(session, y, m)).items():
+        totals = await _category_expense_totals(session, y, m, statuses, set(current_totals))
+        if totals is None:
+            return None
+        for cat_id, amount in totals.items():
             trailing_totals[cat_id] += amount
 
-    best: tuple[float, int, Decimal, Decimal] | None = None
+    best: tuple[Decimal, int, Decimal, Decimal] | None = None
     for cat_id, current in current_totals.items():
         average = trailing_totals.get(cat_id, Decimal("0")) / TRAILING_MONTHS
         if average <= 0:
             continue
-        increase_percent = float((current - average) / average * 100)
+        increase_percent = (current - average) / average * 100
         if increase_percent >= RISING_CATEGORY_THRESHOLD_PERCENT and (best is None or increase_percent > best[0]):
             best = (increase_percent, cat_id, current, average)
 
@@ -88,54 +113,61 @@ async def _rising_category_advice(session: AsyncSession, year: int, month: int) 
         params={
             "category": category.name,
             "percent": round(increase_percent),
-            "current": float(current),
-            "average": float(average),
+            "current": current,
+            "average": average,
+            "currency": (await get_or_create_app_settings(session)).currency,
         },
     )
 
 
-async def _unbudgeted_top_category_advice(session: AsyncSession, year: int, month: int) -> AdviceItem | None:
+async def _unbudgeted_top_category_advice(
+    session: AsyncSession, year: int, month: int, statuses: list[FinancialDataStatus] | None = None,
+) -> AdviceItem | None:
     """This month's highest-spending expense category that has no budget."""
-    current_totals = await _category_expense_totals(session, year, month)
+    statuses = statuses if statuses is not None else []
+    budgeted_ids = set((await session.scalars(select(Budget.category_id))).all())
+    current_totals = await _category_expense_totals(
+        session, year, month, statuses, excluded_category_ids=budgeted_ids,
+    )
     if not current_totals:
         return None
 
-    budgeted_ids = {row[0] for row in (await session.execute(select(Budget.category_id))).all()}
-
     for cat_id, amount in sorted(current_totals.items(), key=lambda item: item[1], reverse=True):
-        if cat_id in budgeted_ids:
-            continue
         category = await session.get(Category, cat_id)
         if category is None:
             continue
         return AdviceItem(
             key="unbudgeted_top_category",
             tone="neutral",
-            params={"category": category.name, "amount": float(amount)},
+            params={"category": category.name, "amount": amount,
+                    "currency": (await get_or_create_app_settings(session)).currency},
         )
 
     return None
 
 
-async def _savings_rate_trend_advice(session: AsyncSession, year: int, month: int) -> AdviceItem | None:
+async def _savings_rate_trend_advice(
+    session: AsyncSession, year: int, month: int, statuses: list[FinancialDataStatus] | None = None,
+) -> AdviceItem | None:
     """This month's savings rate (net / real_income) vs. last month's, when
     the swing is large enough to be worth mentioning."""
     current = await get_dashboard_summary(session, year, month)
     prev_year, prev_month = _previous_month(year, month)
     previous = await get_dashboard_summary(session, prev_year, prev_month)
 
-    if any(
-        item.real_income is None or item.net is None
-        or not item.metric_status.get("real_income", item).complete
-        or not item.metric_status.get("net", item).complete
-        for item in (current, previous)
-    ):
+    statuses = statuses if statuses is not None else []
+    status = merge_statuses(*(merge_statuses(
+        item.metric_status.get("real_income", item), item.metric_status.get("net", item),
+        FinancialDataStatus(complete=item.real_income is not None and item.net is not None),
+    ) for item in (current, previous)))
+    statuses.append(status)
+    if not status.complete:
         return None
     if current.real_income <= 0 or previous.real_income <= 0:
         return None
 
-    current_rate = float(current.net / current.real_income * 100)
-    previous_rate = float(previous.net / previous.real_income * 100)
+    current_rate = current.net / current.real_income * 100
+    previous_rate = previous.net / previous.real_income * 100
     diff = current_rate - previous_rate
 
     if abs(diff) < SAVINGS_RATE_TREND_THRESHOLD_POINTS:
@@ -151,19 +183,17 @@ async def _savings_rate_trend_advice(session: AsyncSession, year: int, month: in
 async def get_advice(session: AsyncSession) -> AdviceResponse:
     today = date.today()
     currency = (await get_or_create_app_settings(session)).currency
-    start_year, start_month = today.year, today.month
-    for _ in range(TRAILING_MONTHS):
-        start_year, start_month = _previous_month(start_year, start_month)
-    _, end = _month_bounds(today.year, today.month)
-    status = await transaction_status(session, currency, start_date=date(start_year, start_month, 1), end_date=end)
-    if not status.complete:
-        return AdviceResponse(currency=currency, **status.model_dump(), items=[])
     generators = (_rising_category_advice, _unbudgeted_top_category_advice, _savings_rate_trend_advice)
-
+    metrics: dict[str, FinancialDataStatus] = {}
     items: list[AdviceItem] = []
-    for generate in generators:
-        item = await generate(session, today.year, today.month)
-        if item is not None:
-            items.append(item)
-
-    return AdviceResponse(currency=currency, items=items)
+    with localcontext() as context:
+        context.prec = 96
+        context.rounding = ROUND_HALF_EVEN
+        for key, generate in zip(("rising_category", "unbudgeted_top_category", "savings_rate_trend"), generators):
+            inputs: list[FinancialDataStatus] = []
+            item = await generate(session, today.year, today.month, inputs)
+            metrics[key] = merge_statuses(*inputs)
+            if item is not None:
+                items.append(item)
+    return AdviceResponse(currency=currency, items=items, metric_status=metrics,
+                          **merge_statuses(*metrics.values()).model_dump())

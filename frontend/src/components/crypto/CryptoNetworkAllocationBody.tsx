@@ -53,11 +53,13 @@ export function buildSlices(holdings: CryptoHolding[], unsetLabel: string): Slic
 }
 
 function DonutTooltip({
+  currency,
   active,
   payload,
   hidden,
   otherLabel,
 }: {
+  currency: string | undefined;
   active?: boolean;
   payload?: Array<{ payload: Slice & { percent: number } }>;
   hidden: boolean;
@@ -69,7 +71,7 @@ function DonutTooltip({
     <div className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-sm shadow-md">
       <p className="font-medium text-text-primary">{slice.key === "__other__" ? otherLabel : slice.label}</p>
       <p className="text-text-muted">
-        {maskAmount(formatCryptoAmount(slice.amount), hidden)} · {slice.percent.toFixed(1)}%
+        {maskAmount(formatCryptoAmount(slice.amount, currency), hidden)} · {slice.percent.toFixed(1)}%
       </p>
     </div>
   );
@@ -84,6 +86,7 @@ function DonutTooltip({
  * disappearing, so nothing silently drops out of the total. */
 export function CryptoNetworkAllocationBody({ holdings, isLoading, hidden }: CryptoNetworkAllocationBodyProps) {
   const { t } = useTranslation();
+  const currency = holdings[0]?.currency;
   const unsetLabel = t("crypto.networkAllocation.unset");
   const otherLabel = t("crypto.allocation.other");
 
@@ -118,7 +121,7 @@ export function CryptoNetworkAllocationBody({ holdings, isLoading, hidden }: Cry
                 <Cell key={slice.key} fill={slice.color} />
               ))}
             </Pie>
-            <Tooltip content={<DonutTooltip hidden={hidden} otherLabel={otherLabel} />} />
+            <Tooltip content={<DonutTooltip currency={currency} hidden={hidden} otherLabel={otherLabel} />} />
           </PieChart>
         </ResponsiveContainer>
       </div>
@@ -138,7 +141,7 @@ export function CryptoNetworkAllocationBody({ holdings, isLoading, hidden }: Cry
               <td className="py-1.5 pr-3 text-right font-medium tabular-nums text-text-primary">
                 {slice.percent.toFixed(1)}%
               </td>
-              <td className="py-1.5 text-right tabular-nums text-text-muted">{maskAmount(formatCryptoAmount(slice.amount), hidden)}</td>
+              <td className="py-1.5 text-right tabular-nums text-text-muted">{maskAmount(formatCryptoAmount(slice.amount, currency), hidden)}</td>
             </tr>
           ))}
         </tbody>

@@ -47,7 +47,7 @@ export function CryptoTransactionHistoryModal({ open, onClose, holding, hidden, 
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block text-sm text-text-primary">
-                  {maskAmount(`${Number(tx.quantity)} ${holding.symbol} · ${formatCryptoAmount(tx.price_per_unit)}`, hidden)}
+                  {maskAmount(`${Number(tx.quantity)} ${holding.symbol} · ${formatCryptoAmount(tx.price_per_unit, tx.quote_currency)}`, hidden)}
                 </span>
                 <span className="block text-xs text-text-muted">
                   {formatTransactionDate(tx.date, true)}

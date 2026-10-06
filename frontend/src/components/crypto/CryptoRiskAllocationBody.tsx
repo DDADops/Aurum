@@ -89,7 +89,7 @@ export function CryptoRiskAllocationBody({ holdings, isLoading, hidden }: Crypto
             {t(`netWorth.riskLevel.${tier.level}` as TranslationKey)}
           </p>
           <p className="mt-1.5 text-xl font-semibold tabular-nums text-text-primary">
-            {maskAmount(formatCurrency(tier.value), hidden)}
+            {maskAmount(formatCurrency(tier.value, holdings[0]?.currency), hidden)}
           </p>
           <p className="mt-1 text-xs text-text-muted">
             {tier.percent.toFixed(1)}% {t("crypto.riskAllocationOfPortfolio")}

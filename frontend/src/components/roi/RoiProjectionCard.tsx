@@ -4,6 +4,7 @@ import { formatCurrency } from "@/lib/format";
 import { useTranslation } from "@/lib/i18n";
 
 interface RoiProjectionCardProps {
+  currency: string | undefined;
   investmentAmount: number;
   annualIncome: number;
   annualRoiPercent: number;
@@ -20,11 +21,13 @@ interface ChartPoint {
 }
 
 function ChartTooltip({
+  currency,
   active,
   payload,
   compoundLabel,
   simpleLabel,
 }: {
+  currency: string | undefined;
   active?: boolean;
   payload?: Array<{ payload: ChartPoint }>;
   compoundLabel: string;
@@ -36,10 +39,10 @@ function ChartTooltip({
     <div className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-sm shadow-md">
       <p className="text-text-muted">{point.year}</p>
       <p className="font-medium" style={{ color: "var(--series-1)" }}>
-        {compoundLabel}: {formatCurrency(point.compound)}
+        {compoundLabel}: {formatCurrency(point.compound, currency)}
       </p>
       <p className="text-text-muted">
-        {simpleLabel}: {formatCurrency(point.simple)}
+        {simpleLabel}: {formatCurrency(point.simple, currency)}
       </p>
     </div>
   );
@@ -56,7 +59,7 @@ function ChartTooltip({
  *   simple(year) = investment + annualIncome × year — the investment
  *     itself never grows, income is just set aside in cash each year.
  * The gap between the two lines *is* what compounding is worth. */
-export function RoiProjectionCard({ investmentAmount, annualIncome, annualRoiPercent }: RoiProjectionCardProps) {
+export function RoiProjectionCard({ currency, investmentAmount, annualIncome, annualRoiPercent }: RoiProjectionCardProps) {
   const { t } = useTranslation();
   const rate = annualRoiPercent / 100;
   const compoundLabel = t("roi.calculator.chartCompoundLabel");
@@ -88,7 +91,7 @@ export function RoiProjectionCard({ investmentAmount, annualIncome, annualRoiPer
                 tickLine={false}
                 tick={{ fill: "var(--text-muted)", fontSize: 11 }}
               />
-              <Tooltip content={<ChartTooltip compoundLabel={compoundLabel} simpleLabel={simpleLabel} />} cursor={{ stroke: "var(--gridline)", strokeWidth: 1 }} />
+              <Tooltip content={<ChartTooltip currency={currency} compoundLabel={compoundLabel} simpleLabel={simpleLabel} />} cursor={{ stroke: "var(--gridline)", strokeWidth: 1 }} />
               <Legend
                 verticalAlign="top"
                 height={24}
@@ -139,17 +142,17 @@ export function RoiProjectionCard({ investmentAmount, annualIncome, annualRoiPer
                     {year === 1 ? t("roi.calculator.yearOne") : t("roi.calculator.yearN", { years: year })}
                   </span>
                   <span className="w-28 shrink-0 text-right text-sm font-medium tabular-nums text-text-primary">
-                    {formatCurrency(compound)}
+                    {formatCurrency(compound, currency)}
                   </span>
                   <span className="hidden w-28 shrink-0 text-right text-sm tabular-nums text-text-muted sm:block">
-                    {formatCurrency(simple)}
+                    {formatCurrency(simple, currency)}
                   </span>
                   <span
                     className="w-24 shrink-0 text-right text-sm tabular-nums"
                     style={{ color: difference >= 0 ? "var(--success)" : "var(--danger)" }}
                   >
                     {difference >= 0 ? "+" : ""}
-                    {formatCurrency(difference)}
+                    {formatCurrency(difference, currency)}
                   </span>
                 </li>
               );

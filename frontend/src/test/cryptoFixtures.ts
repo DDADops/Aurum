@@ -8,6 +8,8 @@ let nextAssetId = 1;
 export function makeHolding(overrides: Partial<CryptoHolding> = {}): CryptoHolding {
   const id = overrides.asset_id ?? nextAssetId++;
   return {
+    currency: "USD",
+    last_price_currency: "USD",
     asset_id: id,
     portfolio_id: 1,
     coingecko_id: `coin-${id}`,

@@ -50,11 +50,11 @@ export function NetWorthPage() {
       <NetWorthChart summary={summary} isLoading={isSummaryLoading} range={range} onRangeChange={setRange} />
 
       {summary?.complete !== false && <>
-      <AssetAllocationCard breakdown={summary?.breakdown ?? []} isLoading={isSummaryLoading} />
+      <AssetAllocationCard currency={summary?.currency} breakdown={summary?.breakdown ?? []} isLoading={isSummaryLoading} />
 
-      <CapitalRoleSummaryCard roles={summary?.capital_roles ?? []} isLoading={isSummaryLoading} />
+      <CapitalRoleSummaryCard currency={summary?.currency} roles={summary?.capital_roles ?? []} isLoading={isSummaryLoading} />
 
-      <RiskAllocationCard riskLevels={summary?.risk_levels ?? []} isLoading={isSummaryLoading} />
+      <RiskAllocationCard currency={summary?.currency} riskLevels={summary?.risk_levels ?? []} isLoading={isSummaryLoading} />
       </>}
 
       <Card>

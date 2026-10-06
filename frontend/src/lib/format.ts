@@ -1,4 +1,4 @@
-import { getCurrency, getLanguage, type Language } from "@/lib/i18n";
+import { t, getLanguage, type Language } from "@/lib/i18n";
 
 /** Maps our app language to the Intl locale used for number/date formatting. */
 export function getIntlLocale(language: Language = getLanguage()): string {
@@ -25,10 +25,9 @@ function createCurrencyFormatter(currency: string, maximumFractionDigits: number
   });
 }
 
-// `currency` defaults to the app's primary currency setting (Settings page)
-// — call sites only need to pass it explicitly when formatting a value known
-// to be in a *different* currency than that setting.
-export function formatCurrency(amount: number | string, currency: string = getCurrency()): string {
+// Currency provenance is required. Missing denomination is unknown, never a settings fallback.
+export function formatCurrency(amount: number | string, currency: string | null | undefined): string {
+  if (!currency) return t("financial.unknown");
   const value = typeof amount === "string" ? Number(amount) : amount;
   return createCurrencyFormatter(currency, 0).format(value);
 }
@@ -42,7 +41,8 @@ export function formatCurrency(amount: number | string, currency: string = getCu
  * above a dollar). For the Crypto tab's per-coin price/holdings/avg-buy-price
  * cells and per-transaction price — anywhere a single coin's own value
  * needs to be told apart from zero, not just a portfolio-wide total. */
-export function formatCryptoAmount(amount: number | string, currency: string = getCurrency()): string {
+export function formatCryptoAmount(amount: number | string, currency: string | null | undefined): string {
+  if (!currency) return t("financial.unknown");
   const value = typeof amount === "string" ? Number(amount) : amount;
   const abs = Math.abs(value);
   const maximumFractionDigits =
@@ -56,7 +56,8 @@ export function formatCryptoAmount(amount: number | string, currency: string = g
   return createCurrencyFormatter(currency, maximumFractionDigits).format(value);
 }
 
-export function formatSignedCurrency(amount: number | string, currency: string = getCurrency()): string {
+export function formatSignedCurrency(amount: number | string, currency: string | null | undefined): string {
+  if (!currency) return t("financial.unknown");
   const value = typeof amount === "string" ? Number(amount) : amount;
   const sign = value > 0 ? "+" : "";
   return `${sign}${formatCurrency(value, currency)}`;

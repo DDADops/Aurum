@@ -43,12 +43,14 @@ interface ChartPoint {
 }
 
 function ChartTooltip({
+  currency,
   active,
   payload,
   incomeLabel,
   expenseLabel,
   netLabel,
 }: {
+  currency: string | undefined;
   active?: boolean;
   payload?: Array<{ payload: ChartPoint }>;
   incomeLabel: string;
@@ -61,13 +63,13 @@ function ChartTooltip({
     <div className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-sm shadow-md">
       <p className="text-text-muted">{formatMonthLabel(point.key)}</p>
       <p className="text-success">
-        {incomeLabel}: {formatCurrency(point.income)}
+        {incomeLabel}: {formatCurrency(point.income, currency)}
       </p>
       <p className="text-danger">
-        {expenseLabel}: {formatCurrency(point.expense)}
+        {expenseLabel}: {formatCurrency(point.expense, currency)}
       </p>
       <p className="font-medium text-text-primary">
-        {netLabel}: {formatSignedCurrency(point.net)}
+        {netLabel}: {formatSignedCurrency(point.net, currency)}
       </p>
     </div>
   );
@@ -136,7 +138,7 @@ export function CashFlowChart({ cashFlow, isLoading }: CashFlowChartProps) {
                   />
                 )}
                 <Tooltip
-                  content={<ChartTooltip incomeLabel={incomeLabel} expenseLabel={expenseLabel} netLabel={netLabel} />}
+                  content={<ChartTooltip currency={cashFlow?.currency} incomeLabel={incomeLabel} expenseLabel={expenseLabel} netLabel={netLabel} />}
                   cursor={{ fill: "var(--surface-2)" }}
                 />
                 <Legend

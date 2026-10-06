@@ -9,6 +9,7 @@ import { translateCategoryName } from "@/lib/categoryLabels";
 import type { CategoryRankingItem } from "@/types";
 
 interface CategoryRankingCardProps {
+  currency: string | undefined;
   items: CategoryRankingItem[];
   isLoading: boolean;
   selectedCategoryId: number | null;
@@ -20,7 +21,7 @@ interface CategoryRankingCardProps {
  * detail chart below (locked to one category), this is "which category
  * costs the most" across the whole range at once. Clicking a row drills
  * into that category in the detail chart/transaction list below. */
-export function CategoryRankingCard({ items, isLoading, selectedCategoryId, onSelectCategory }: CategoryRankingCardProps) {
+export function CategoryRankingCard({ currency, items, isLoading, selectedCategoryId, onSelectCategory }: CategoryRankingCardProps) {
   const { t } = useTranslation();
   // The subcategory breakdown lives in a modal, not expanded inline — a
   // category with many subcategories would otherwise push the whole ranking
@@ -93,7 +94,7 @@ export function CategoryRankingCard({ items, isLoading, selectedCategoryId, onSe
                         </span>
                       </span>
                       <span className="shrink-0 text-sm font-medium tabular-nums text-text-primary">
-                        {formatCurrency(item.amount)}
+                        {formatCurrency(item.amount, currency)}
                       </span>
                     </button>
                   </div>
@@ -105,7 +106,7 @@ export function CategoryRankingCard({ items, isLoading, selectedCategoryId, onSe
       </CardContent>
 
       {breakdownItem && (
-        <CategoryBreakdownModal
+        <CategoryBreakdownModal currency={currency}
           open
           onClose={() => setBreakdownItem(null)}
           categoryId={breakdownItem.category_id}

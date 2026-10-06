@@ -1,8 +1,10 @@
+import { useTranslation } from "@/lib/i18n";
 import { useState } from "react";
 import { RoiCalculatorCard } from "@/components/roi/RoiCalculatorCard";
 import { RoiProjectionCard } from "@/components/roi/RoiProjectionCard";
 
 export function RoiPage() {
+  const { currency } = useTranslation();
   const [investment, setInvestment] = useState("");
   const [monthlyIncome, setMonthlyIncome] = useState("");
 
@@ -26,7 +28,7 @@ export function RoiPage() {
       />
 
       {annualRoiPercent !== null && (
-        <RoiProjectionCard
+        <RoiProjectionCard currency={currency}
           investmentAmount={investmentAmount}
           annualIncome={annualIncome}
           annualRoiPercent={annualRoiPercent}

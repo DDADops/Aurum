@@ -19,6 +19,8 @@ export function useUpdateAccount() {
   return useMutation({
     mutationFn: ({ id, input }: { id: number; input: Partial<AccountInput> & { is_archived?: boolean } }) =>
       updateAccount(id, input),
+    // A concurrent first posting can reject a formerly eligible currency change.
+    onError: () => queryClient.invalidateQueries({ queryKey: ["accounts"] }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["accounts"] }),
   });
 }

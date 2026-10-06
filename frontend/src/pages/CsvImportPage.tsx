@@ -669,7 +669,7 @@ export function CsvImportPage() {
                               }`}
                             >
                               {item.type === "expense" ? "-" : "+"}
-                              {formatCurrency(item.amount)}
+                              {formatCurrency(item.amount, accounts?.find((account) => account.id === item.account_id)?.currency)}
                             </td>
                           </tr>
                         ))}

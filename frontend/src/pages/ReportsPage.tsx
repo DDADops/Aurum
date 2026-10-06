@@ -146,7 +146,7 @@ export function ReportsPage() {
 
       <CategorySpendingChart report={report} isLoading={isReportLoading} />
 
-      {ranking?.complete === false ? <FinancialDataStatus status={ranking} /> : <CategoryRankingCard
+      {ranking?.complete === false ? <FinancialDataStatus status={ranking} /> : <CategoryRankingCard currency={ranking?.currency}
         items={ranking?.items ?? []}
         isLoading={isRankingLoading}
         selectedCategoryId={categoryId}

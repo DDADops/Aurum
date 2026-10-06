@@ -14,6 +14,7 @@ import type { TransactionInput } from "@/types";
 function useInvalidateAfterTransactionChange() {
   const queryClient = useQueryClient();
   return () => {
+    queryClient.invalidateQueries({ queryKey: ["accounts"] });
     queryClient.invalidateQueries({ queryKey: ["transactions"] });
     // Without this, a second CSV import of the same date range within
     // staleTime (see main.tsx) would check for duplicates against a cached

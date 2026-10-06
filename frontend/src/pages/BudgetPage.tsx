@@ -35,6 +35,7 @@ export function BudgetPage() {
   function openEditModal(item: BudgetStatus) {
     setEditingBudget({
       id: item.budget_id,
+      currency: item.currency,
       category_id: item.category_id,
       category_name: item.category_name,
       category_color: item.category_color,

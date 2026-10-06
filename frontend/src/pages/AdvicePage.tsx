@@ -29,13 +29,13 @@ function adviceMessage(item: AdviceItem, t: ReturnType<typeof useTranslation>["t
       return t("advice.risingCategory", {
         category: translateCategoryName(String(item.params.category)),
         percent: item.params.percent,
-        current: formatCurrency(Number(item.params.current)),
-        average: formatCurrency(Number(item.params.average)),
+        current: formatCurrency(item.params.current, typeof item.params.currency === "string" ? item.params.currency : undefined),
+        average: formatCurrency(item.params.average, typeof item.params.currency === "string" ? item.params.currency : undefined),
       });
     case "unbudgeted_top_category":
       return t("advice.unbudgetedTopCategory", {
         category: translateCategoryName(String(item.params.category)),
-        amount: formatCurrency(Number(item.params.amount)),
+        amount: formatCurrency(item.params.amount, typeof item.params.currency === "string" ? item.params.currency : undefined),
       });
     case "savings_rate_trend": {
       const diff = Number(item.params.diff);

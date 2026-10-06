@@ -1,11 +1,13 @@
 import { Archive, ArchiveRestore, Banknote, CreditCard, Package, Pencil, PiggyBank, TrendingUp, Trash2, Wallet, type LucideIcon } from "lucide-react";
 import { formatCurrency } from "@/lib/format";
 import { useTranslation, type TranslationKey } from "@/lib/i18n";
-import type { Account, AccountType, AccountWithBalance } from "@/types";
+import { isFinancialDataIncomplete, knownFinancialValue } from "@/lib/financialData";
+import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
+import type { AccountType, AccountWithBalance } from "@/types";
 
 interface AccountListProps {
   items: AccountWithBalance[];
-  onEdit: (account: Account) => void;
+  onEdit: (account: AccountWithBalance) => void;
   onToggleArchived: (account: AccountWithBalance) => void;
   onDelete: (account: AccountWithBalance) => void;
 }
@@ -31,7 +33,7 @@ export function AccountList({ items, onEdit, onToggleArchived, onDelete }: Accou
     <ul className="divide-y divide-gridline">
       {items.map((account) => {
         const Icon = TYPE_ICONS[account.type];
-        const balance = Number(account.balance);
+        const balance = knownFinancialValue(account.balance, account);
 
         return (
           <li key={account.id} className={`flex items-center gap-3 py-3 ${account.is_archived ? "opacity-50" : ""}`}>
@@ -48,14 +50,16 @@ export function AccountList({ items, onEdit, onToggleArchived, onDelete }: Accou
                 )}
               </span>
               <span className="block truncate text-xs text-text-muted">
-                {t(`account.type.${account.type}` as TranslationKey)}
+                {t(`account.type.${account.type}` as TranslationKey)} · {account.currency}
               </span>
             </span>
             <span
               className="shrink-0 text-sm font-medium tabular-nums"
-              style={{ color: balance < 0 ? "var(--danger)" : "var(--text-primary)" }}
+              style={{ color: typeof balance === "string" && balance.startsWith("-") ? "var(--danger)" : "var(--text-primary)" }}
             >
-              {formatCurrency(balance)}
+              {balance === null
+                ? <FinancialDataStatus status={isFinancialDataIncomplete(account) ? account : undefined} />
+                : formatCurrency(balance, account.currency)}
             </span>
             <span className="flex shrink-0 gap-1">
               <button

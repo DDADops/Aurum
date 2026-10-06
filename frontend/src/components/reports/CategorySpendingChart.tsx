@@ -41,13 +41,13 @@ function computeYearTicks(keys: string[]): string[] {
   return ticks;
 }
 
-function ChartTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: { key: string; amount: number } }> }) {
+function ChartTooltip({ active, payload, currency }: { currency: string | undefined; active?: boolean; payload?: Array<{ payload: { key: string; amount: number } }> }) {
   if (!active || !payload?.length) return null;
   const point = payload[0].payload;
   return (
     <div className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-sm shadow-md">
       <p className="text-text-muted">{formatMonthLabel(point.key)}</p>
-      <p className="font-medium text-text-primary">{formatCurrency(point.amount)}</p>
+      <p className="font-medium text-text-primary">{formatCurrency(point.amount, currency)}</p>
     </div>
   );
 }
@@ -101,7 +101,7 @@ export function CategorySpendingChart({ report, isLoading }: CategorySpendingCha
                     interval="preserveStartEnd"
                   />
                 )}
-                <Tooltip content={<ChartTooltip />} cursor={{ fill: "var(--surface-2)" }} />
+                <Tooltip content={<ChartTooltip currency={report?.currency} />} cursor={{ fill: "var(--surface-2)" }} />
                 <Bar dataKey="amount" fill={report.category_color} radius={[2, 2, 0, 0]} isAnimationActive={false} />
               </BarChart>
             </ResponsiveContainer>

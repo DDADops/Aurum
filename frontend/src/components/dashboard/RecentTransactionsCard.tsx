@@ -67,7 +67,7 @@ export function RecentTransactionsCard({ year, month }: RecentTransactionsCardPr
                     }`}
                   >
                     {isTransfer ? "" : isExpense ? "-" : "+"}
-                    {formatCurrency(Number(tx.amount))}
+                    {formatCurrency(tx.amount, tx.account.currency)}
                   </span>
                 </li>
               );

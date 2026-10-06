@@ -13,6 +13,7 @@ interface CategoryBreakdownChild {
 }
 
 interface CategoryBreakdownModalProps {
+  currency: string | undefined;
   open: boolean;
   onClose: () => void;
   categoryId: number;
@@ -28,7 +29,7 @@ interface CategoryBreakdownModalProps {
  * between the Dashboard breakdown and the Reports category ranking, which
  * expose the same shape (see services/category_rollup.py's
  * CategoryRollupChildItem). */
-export function CategoryBreakdownModal({
+export function CategoryBreakdownModal({ currency,
   open,
   onClose,
   categoryId,
@@ -43,7 +44,7 @@ export function CategoryBreakdownModal({
     <Dialog open={open} onClose={onClose} title={translateCategoryName(categoryName)}>
       <div className="mb-3 flex items-center justify-between border-b border-gridline pb-3 text-sm">
         <span className="text-text-muted">{t("reports.categoryBreakdownTotalLabel")}</span>
-        <span className="font-semibold tabular-nums text-text-primary">{formatCurrency(totalAmount)}</span>
+        <span className="font-semibold tabular-nums text-text-primary">{formatCurrency(totalAmount, currency)}</span>
       </div>
       <ul className="divide-y divide-gridline">
         {children.map((child) => {
@@ -63,7 +64,7 @@ export function CategoryBreakdownModal({
                 {percent.toFixed(0)}%
               </span>
               <span className="shrink-0 text-sm font-medium tabular-nums text-text-primary">
-                {formatCurrency(child.amount)}
+                {formatCurrency(child.amount, currency)}
               </span>
             </li>
           );

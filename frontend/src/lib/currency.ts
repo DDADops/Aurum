@@ -49,6 +49,7 @@ export const CURRENCIES: CurrencyOption[] = [
   { code: "UAH", nameRu: "Украинская гривна", nameEn: "Ukrainian Hryvnia" },
   { code: "USD", nameRu: "Доллар США", nameEn: "US Dollar" },
   { code: "UZS", nameRu: "Узбекский сум", nameEn: "Uzbekistani Som" },
+  { code: "VND", nameRu: "Вьетнамский донг", nameEn: "Vietnamese Dong" },
   { code: "ZAR", nameRu: "Южноафриканский рэнд", nameEn: "South African Rand" },
 ];
 

@@ -6,7 +6,7 @@ import { AccountList } from "@/components/accounts/AccountList";
 import { AccountFormModal } from "@/components/accounts/AccountFormModal";
 import { useAccounts, useDeleteAccount, useUpdateAccount } from "@/hooks/useAccounts";
 import { useTranslation } from "@/lib/i18n";
-import type { Account, AccountWithBalance } from "@/types";
+import type { AccountWithBalance } from "@/types";
 
 export function AccountsPage() {
   const { t } = useTranslation();
@@ -16,14 +16,14 @@ export function AccountsPage() {
   const deleteAccount = useDeleteAccount();
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+  const [editingAccount, setEditingAccount] = useState<AccountWithBalance | null>(null);
 
   function openCreateModal() {
     setEditingAccount(null);
     setModalOpen(true);
   }
 
-  function openEditModal(account: Account) {
+  function openEditModal(account: AccountWithBalance) {
     setEditingAccount(account);
     setModalOpen(true);
   }
@@ -71,7 +71,7 @@ export function AccountsPage() {
         </CardContent>
       </Card>
 
-      <AccountFormModal open={modalOpen} onClose={() => setModalOpen(false)} account={editingAccount} />
+      <AccountFormModal open={modalOpen} onClose={() => setModalOpen(false)} account={accounts?.find((item) => item.id === editingAccount?.id) ?? editingAccount} />
     </div>
   );
 }

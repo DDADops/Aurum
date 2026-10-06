@@ -41,14 +41,14 @@ function computeYearTicks(dates: string[]): string[] {
   return ticks;
 }
 
-function ChartTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: { date: string; value: number | null } }> }) {
+function ChartTooltip({ active, payload, currency }: { currency: string | undefined; active?: boolean; payload?: Array<{ payload: { date: string; value: number | null } }> }) {
   if (!active || !payload?.length) return null;
   const point = payload[0].payload;
   if (point.value === null) return null;
   return (
     <div className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-sm shadow-md">
       <p className="text-text-muted">{formatAxisDate(point.date)}</p>
-      <p className="font-medium text-text-primary">{formatCurrency(point.value)}</p>
+      <p className="font-medium text-text-primary">{formatCurrency(point.value, currency)}</p>
     </div>
   );
 }
@@ -113,7 +113,7 @@ export function NetWorthChart({ summary, isLoading, range, onRangeChange }: NetW
                     interval="preserveStartEnd"
                   />
                 )}
-                <Tooltip content={<ChartTooltip />} cursor={{ stroke: "var(--gridline)", strokeWidth: 1 }} />
+                <Tooltip content={<ChartTooltip currency={summary?.currency} />} cursor={{ stroke: "var(--gridline)", strokeWidth: 1 }} />
                 <Area
                   connectNulls={false}
                   type="monotone"

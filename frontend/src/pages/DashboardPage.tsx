@@ -87,7 +87,7 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
         {data?.metric_status?.spending_by_category?.complete === false ? (
           <FinancialDataStatus status={data.metric_status.spending_by_category} />
-        ) : <SpendingByCategoryCard items={data?.spending_by_category ?? []} />}
+        ) : <SpendingByCategoryCard currency={data?.currency} items={data?.spending_by_category ?? []} />}
         <RecentTransactionsCard year={year} month={month} />
       </div>
     </div>

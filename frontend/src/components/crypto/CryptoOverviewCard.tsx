@@ -14,6 +14,7 @@ import type { CryptoHistoryResponse, CryptoHolding, CryptoRange } from "@/types"
 type OverviewTab = "history" | "allocation" | "risk" | "networks";
 
 interface CryptoOverviewCardProps {
+  currency: string | undefined;
   totalValue: number;
   history: CryptoHistoryResponse | undefined;
   isHistoryLoading: boolean;
@@ -33,7 +34,7 @@ interface CryptoOverviewCardProps {
  * its footprint on the page instead of growing it. The
  * total/eye toggle/change line stay in the shared header regardless of
  * which tab is active — only the content panel below switches. */
-export function CryptoOverviewCard({
+export function CryptoOverviewCard({ currency,
   totalValue,
   history,
   isHistoryLoading,
@@ -56,7 +57,7 @@ export function CryptoOverviewCard({
         <div>
           <CardTitle>{t("nav.crypto")}</CardTitle>
           <p className="mt-1.5 flex items-center gap-2 text-2xl font-semibold tabular-nums text-text-primary sm:text-[28px]">
-            {maskAmount(formatCurrency(totalValue), hidden)}
+            {maskAmount(formatCurrency(totalValue, currency), hidden)}
             <button
               type="button"
               aria-label={hidden ? t("crypto.chart.show") : t("crypto.chart.hide")}
@@ -69,7 +70,7 @@ export function CryptoOverviewCard({
           {history && (
             <p className="mt-1 flex items-center gap-1 text-sm font-medium" style={{ color: trendColor }}>
               {isPositive ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
-              {maskAmount(formatSignedCurrency(history.change_amount), hidden)}
+              {maskAmount(formatSignedCurrency(history.change_amount, history?.currency), hidden)}
               {history.change_percent !== null && ` (${isPositive ? "+" : ""}${history.change_percent.toFixed(1)}%)`}
               <span className="font-normal text-text-muted">{t("netWorth.periodSuffix")}</span>
             </p>

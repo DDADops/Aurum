@@ -25,9 +25,7 @@ export default function App() {
   const [collapsed, setCollapsed] = useLocalStorageState("aurum:sidebar-collapsed", false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
-  // Primary currency is server-persisted, unlike language — sync the
-  // client-side reactive mirror (lib/i18n's getCurrency/formatCurrency)
-  // once the setting loads, so it's not stuck on the "USD" fallback default.
+  // Sync server settings for UI defaults; money displays use their own provenance.
   const { data: settings } = useAppSettings();
   useEffect(() => {
     if (settings) setCurrency(settings.currency);

@@ -40,7 +40,7 @@ export function BudgetList({ items, onEdit, onDelete }: BudgetListProps) {
                 {translateCategoryName(item.category_name)}
               </span>
               <span className="shrink-0 text-sm tabular-nums text-text-primary">
-                {formatCurrency(spent)} <span className="text-text-muted">/ {formatCurrency(limit)}</span>
+                {formatCurrency(spent, item.currency)} <span className="text-text-muted">/ {formatCurrency(limit, item.currency)}</span>
               </span>
               <span className="flex shrink-0 gap-1">
                 <button
@@ -74,8 +74,8 @@ export function BudgetList({ items, onEdit, onDelete }: BudgetListProps) {
             </div>
             <p className="mt-1 pl-12 text-xs" style={{ color: item.is_over_budget ? "var(--danger)" : "var(--text-muted)" }}>
               {item.is_over_budget
-                ? t("budget.overBy", { amount: formatCurrency(spent - limit) })
-                : t("budget.remaining", { amount: formatCurrency(limit - spent) })}
+                ? t("budget.overBy", { amount: formatCurrency(spent - limit, item.currency) })
+                : t("budget.remaining", { amount: formatCurrency(limit - spent, item.currency) })}
             </p>
           </li>
         );

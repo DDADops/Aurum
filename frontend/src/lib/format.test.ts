@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { setLanguage } from "@/lib/i18n";
+import { setCurrency, setLanguage, t } from "@/lib/i18n";
 import {
   formatCryptoAmount,
   formatCurrency,
@@ -151,5 +151,31 @@ describe("pluralizeRu", () => {
     expect(pluralizeRu(5, "актив", "актива", "активов")).toBe("активов");
     expect(pluralizeRu(11, "актив", "актива", "активов")).toBe("активов");
     expect(pluralizeRu(14, "актив", "актива", "активов")).toBe("активов");
+  });
+});
+
+
+describe("explicit money denomination", () => {
+  it("does not fall back to settings for any money helper", () => {
+    setLanguage("en");
+    for (const format of [formatCurrency, formatCryptoAmount, formatSignedCurrency]) {
+      setCurrency("USD");
+      const rub = format("100000", "RUB");
+      setCurrency("VND");
+      expect(format("100000", "RUB")).toBe(rub);
+      expect(format("100000", null)).toBe(t("financial.unknown"));
+      expect(format("100000", undefined)).toBe(t("financial.unknown"));
+      // @ts-expect-error A monetary formatter requires an explicit denomination argument.
+      expect(format("100000")).toBe(t("financial.unknown"));
+    }
+    setCurrency("USD");
+  });
+
+  it("formats VND without changing the authoritative Decimal string", () => {
+    const input = Object.freeze({ amount: "5000000.123456789012345678", currency: "VND" });
+    setLanguage("en");
+    expect(formatCurrency(input.amount, input.currency)).toContain("5,000,000");
+    expect(formatCurrency(input.amount, input.currency)).toContain("₫");
+    expect(input.amount).toBe("5000000.123456789012345678");
   });
 });

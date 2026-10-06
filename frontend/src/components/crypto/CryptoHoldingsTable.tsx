@@ -123,7 +123,7 @@ export function CryptoHoldingsTable({
                 </td>
                 <td className="py-3.5 pr-4 text-right align-middle tabular-nums text-text-primary">
                   {holding.current_price !== null
-                    ? maskAmount(formatCryptoAmount(holding.current_price), hidden)
+                    ? maskAmount(formatCryptoAmount(holding.current_price, holding.last_price_currency), hidden)
                     : t("crypto.pendingPrice")}
                 </td>
                 <td className="py-3.5 pr-4 text-right align-middle">
@@ -137,20 +137,20 @@ export function CryptoHoldingsTable({
                 </td>
                 <td className="py-3.5 pr-4 text-right align-middle">
                   <span className="block tabular-nums text-text-primary">
-                    {holding.value !== null ? maskAmount(formatCryptoAmount(holding.value), hidden) : t("crypto.pendingPrice")}
+                    {holding.value !== null ? maskAmount(formatCryptoAmount(holding.value, holding.currency), hidden) : t("crypto.pendingPrice")}
                   </span>
                   <span className="mt-0.5 block text-xs tabular-nums text-text-muted">
                     {maskAmount(`${Number(holding.quantity)} ${holding.symbol}`, hidden)}
                   </span>
                 </td>
                 <td className="py-3.5 pr-4 text-right align-middle tabular-nums text-text-primary">
-                  {holding.avg_buy_price !== null ? maskAmount(formatCryptoAmount(holding.avg_buy_price), hidden) : "—"}
+                  {holding.avg_buy_price !== null ? maskAmount(formatCryptoAmount(holding.avg_buy_price, holding.currency), hidden) : "—"}
                 </td>
                 <td className="py-3.5 pr-4 text-right align-middle">
                   {holding.profit_loss !== null && holding.profit_loss_percent !== null ? (
                     <>
                       <span className="block tabular-nums" style={{ color: profitColor }}>
-                        {maskAmount(`${sign}${formatCryptoAmount(holding.profit_loss)}`, hidden)}
+                        {maskAmount(`${sign}${formatCryptoAmount(holding.profit_loss, holding.currency)}`, hidden)}
                       </span>
                       <span className="mt-0.5 block text-xs tabular-nums" style={{ color: profitColor }}>
                         {sign}

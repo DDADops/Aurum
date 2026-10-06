@@ -14,10 +14,12 @@ function formatAxisDate(iso: string): string {
 }
 
 function ChartTooltip({
+  currency,
   active,
   payload,
   hidden,
 }: {
+  currency: string | undefined;
   active?: boolean;
   payload?: Array<{ payload: { date: string; value: number } }>;
   hidden: boolean;
@@ -27,7 +29,7 @@ function ChartTooltip({
   return (
     <div className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-sm shadow-md">
       <p className="text-text-muted">{formatAxisDate(point.date)}</p>
-      <p className="font-medium text-text-primary">{maskAmount(formatCurrency(point.value), hidden)}</p>
+      <p className="font-medium text-text-primary">{maskAmount(formatCurrency(point.value, currency), hidden)}</p>
     </div>
   );
 }
@@ -58,7 +60,7 @@ export function CryptoHistoryChartBody({ history, isLoading, hidden }: CryptoHis
                 </linearGradient>
               </defs>
               <YAxis hide domain={["auto", "auto"]} />
-              <Tooltip content={<ChartTooltip hidden={hidden} />} cursor={{ stroke: "var(--gridline)", strokeWidth: 1 }} />
+              <Tooltip content={<ChartTooltip currency={history?.currency} hidden={hidden} />} cursor={{ stroke: "var(--gridline)", strokeWidth: 1 }} />
               <Area
                 type="monotone"
                 dataKey="value"

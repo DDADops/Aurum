@@ -13,6 +13,7 @@ function useInvalidateRecurring() {
   return (alsoInvalidateTransactions: boolean) => {
     queryClient.invalidateQueries({ queryKey: ["recurring"] });
     if (alsoInvalidateTransactions) {
+      queryClient.invalidateQueries({ queryKey: ["accounts"] });
       // Posting creates a real Transaction — refresh everything derived from it.
       queryClient.invalidateQueries({ queryKey: ["transactions"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });

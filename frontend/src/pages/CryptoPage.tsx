@@ -118,7 +118,7 @@ export function CryptoPage() {
         onEdit={openEditPortfolioModal}
       />
 
-      <CryptoOverviewCard
+      <CryptoOverviewCard currency={data?.currency}
         totalValue={totalValue}
         history={history}
         isHistoryLoading={isHistoryLoading}
@@ -130,7 +130,7 @@ export function CryptoPage() {
         onToggleHidden={() => setHidden((prev) => !prev)}
       />
 
-      <CryptoStatsRow
+      <CryptoStatsRow currency={data?.currency}
         holdings={holdings}
         isLoading={isLoading}
         hidden={hidden}

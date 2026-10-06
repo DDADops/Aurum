@@ -10,23 +10,24 @@ import { translateCategoryName } from "@/lib/categoryLabels";
 import type { CategoryBreakdownItem } from "@/types";
 
 interface SpendingByCategoryCardProps {
+  currency: string | undefined;
   items: CategoryBreakdownItem[];
 }
 
-function DonutTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: CategoryBreakdownItem }> }) {
+function DonutTooltip({ active, payload, currency }: { currency: string | undefined; active?: boolean; payload?: Array<{ payload: CategoryBreakdownItem }> }) {
   if (!active || !payload?.length) return null;
   const item = payload[0].payload;
   return (
     <div className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-sm shadow-md">
       <p className="font-medium text-text-primary">{translateCategoryName(item.name)}</p>
       <p className="text-text-secondary">
-        {formatCurrency(item.amount)} · {item.percent.toFixed(1)}%
+        {formatCurrency(item.amount, currency)} · {item.percent.toFixed(1)}%
       </p>
     </div>
   );
 }
 
-export function SpendingByCategoryCard({ items }: SpendingByCategoryCardProps) {
+export function SpendingByCategoryCard({ currency, items }: SpendingByCategoryCardProps) {
   const { t } = useTranslation();
   // The breakdown lives in a modal, not expanded inline — a category with
   // many subcategories (or many split purchases) would otherwise push this
@@ -66,7 +67,7 @@ export function SpendingByCategoryCard({ items }: SpendingByCategoryCardProps) {
                       <Cell key={item.category_id ?? "other"} fill={item.color} />
                     ))}
                   </Pie>
-                  <Tooltip content={<DonutTooltip />} />
+                  <Tooltip content={<DonutTooltip currency={currency} />} />
                 </PieChart>
               </ResponsiveContainer>
             </div>
@@ -103,7 +104,7 @@ export function SpendingByCategoryCard({ items }: SpendingByCategoryCardProps) {
                       {translateCategoryName(item.name)}
                     </span>
                     <span className="shrink-0 text-sm font-medium tabular-nums text-text-primary">
-                      {formatCurrency(item.amount)}
+                      {formatCurrency(item.amount, currency)}
                     </span>
                   </li>
                 );
@@ -114,7 +115,7 @@ export function SpendingByCategoryCard({ items }: SpendingByCategoryCardProps) {
       </CardContent>
 
       {breakdownItem && breakdownItem.category_id !== null && (
-        <CategoryBreakdownModal
+        <CategoryBreakdownModal currency={currency}
           open
           onClose={() => setBreakdownItem(null)}
           categoryId={breakdownItem.category_id}

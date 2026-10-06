@@ -5,6 +5,7 @@ import { useTranslation, type TranslationKey } from "@/lib/i18n";
 import type { NetWorthBreakdownItem } from "@/types";
 
 interface AssetAllocationCardProps {
+  currency: string | undefined;
   breakdown: NetWorthBreakdownItem[];
   isLoading: boolean;
 }
@@ -16,7 +17,7 @@ function breakdownLabelKey(key: string): TranslationKey {
   return `netWorth.assetClass.${key}` as TranslationKey;
 }
 
-export function AssetAllocationCard({ breakdown, isLoading }: AssetAllocationCardProps) {
+export function AssetAllocationCard({ currency, breakdown, isLoading }: AssetAllocationCardProps) {
   const { t } = useTranslation();
   const total = breakdown.reduce((sum, item) => sum + Number(item.amount), 0);
 
@@ -24,7 +25,7 @@ export function AssetAllocationCard({ breakdown, isLoading }: AssetAllocationCar
     <Card>
       <CardHeader>
         <CardTitle>
-          {t("netWorth.assetsTitlePrefix")} · {formatCurrency(total)}
+          {t("netWorth.assetsTitlePrefix")} · {formatCurrency(total, currency)}
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -82,7 +83,7 @@ export function AssetAllocationCard({ breakdown, isLoading }: AssetAllocationCar
                       {item.percent.toFixed(0)}%
                     </span>
                     <span className="shrink-0 text-sm font-medium tabular-nums text-text-primary">
-                      {formatCurrency(item.amount)}
+                      {formatCurrency(item.amount, currency)}
                     </span>
                   </li>
                 );

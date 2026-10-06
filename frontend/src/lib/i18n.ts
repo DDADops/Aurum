@@ -363,9 +363,9 @@ const ru = {
   "settings.themeLight": "Светлая",
   "settings.themeDark": "Тёмная",
   "settings.themeSystem": "Системная",
-  "settings.currency": "Основная валюта",
+  "settings.currency": "Базовая валюта / валюта отображения",
   "settings.currencyHint":
-    "Меняет только отображение сумм — уже введённые значения не пересчитываются и не конвертируются.",
+    "Валюта сводных показателей и отчётов. Сохранённые суммы и валюты счетов, бюджетов и целей не меняются.",
   "settings.alertsTitle": "Проактивные предупреждения",
   "settings.alertsHint": "Через сколько месяцев подряд показывать предупреждение на Dashboard и «Капитал».",
   "settings.negativeCashFlowThresholdLabel": "Расходы превышают доходы, мес. подряд",
@@ -468,6 +468,8 @@ const ru = {
   "account.type.cash": "Наличные",
   "account.type.investment": "Инвестиционный счёт",
   "account.type.other": "Другое",
+  "account.currency": "Валюта счёта",
+  "account.currencyHistory": "Валюту нельзя изменить, пока у счёта есть денежная история, включая входящие переводы. Нулевой баланс не означает отсутствие истории.",
   "account.form.newTitle": "Новый счёт",
   "account.form.editTitle": "Изменить счёт",
   "account.form.nameLabel": "Название",
@@ -896,9 +898,9 @@ const en: Record<keyof typeof ru, string> = {
   "settings.themeLight": "Light",
   "settings.themeDark": "Dark",
   "settings.themeSystem": "System",
-  "settings.currency": "Primary currency",
+  "settings.currency": "Base / display currency",
   "settings.currencyHint":
-    "Only changes how amounts are displayed — values you've already entered aren't recalculated or converted.",
+    "Currency for aggregate views and reports. Stored amounts and account, budget and goal currencies stay unchanged.",
   "settings.alertsTitle": "Proactive alerts",
   "settings.alertsHint": "How many consecutive months before showing a warning on Dashboard and Net Worth.",
   "settings.negativeCashFlowThresholdLabel": "Expenses exceed income, consecutive months",
@@ -1001,6 +1003,8 @@ const en: Record<keyof typeof ru, string> = {
   "account.type.cash": "Cash",
   "account.type.investment": "Investment",
   "account.type.other": "Other",
+  "account.currency": "Account currency",
+  "account.currencyHistory": "Currency cannot change while the account has monetary history, including incoming transfers. A zero balance does not mean there is no history.",
   "account.form.newTitle": "New account",
   "account.form.editTitle": "Edit account",
   "account.form.nameLabel": "Name",
@@ -1081,7 +1085,7 @@ let currentLanguage: Language = readInitialLanguage();
 // language this isn't client-only — it's persisted server-side (GET/PATCH
 // /api/settings) since it also drives what new accounts/assets are created
 // with. App.tsx syncs this from the server once on boot via setCurrency();
-// until that resolves, formatCurrency() falls back to this default.
+// used for UI defaults and hypothetical ROI inputs, never money formatting fallback.
 let currentCurrency = "USD";
 const listeners = new Set<() => void>();
 
@@ -1126,10 +1130,7 @@ export function t(key: TranslationKey, params?: Record<string, string | number>)
   return interpolate(translations[currentLanguage][key], params);
 }
 
-/** Subscribes the component to language AND currency changes so it re-renders
- * on either toggle — most components that call formatCurrency() already call
- * this hook for text, so that alone is enough to pick up a fresh currency on
- * their next render even without reading `currency` from the return value. */
+/** Subscribes to language and the settings currency mirror for UI defaults. */
 export function useTranslation() {
   const language = useSyncExternalStore(subscribe, () => currentLanguage);
   const currency = useSyncExternalStore(subscribe, () => currentCurrency);

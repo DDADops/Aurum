@@ -16,6 +16,7 @@ export function CurrencyCard() {
       </CardHeader>
       <CardContent className="space-y-2">
         <Select
+          aria-label={t("settings.currency")}
           value={settings?.currency ?? ""}
           disabled={isLoading || updateSettings.isPending}
           onChange={(event) => updateSettings.mutate({ currency: event.target.value })}

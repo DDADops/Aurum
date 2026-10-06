@@ -5,6 +5,7 @@ import { useTranslation } from "@/lib/i18n";
 import type { CryptoHolding, CryptoRange } from "@/types";
 
 interface CryptoStatsRowProps {
+  currency: string | undefined;
   holdings: CryptoHolding[];
   isLoading: boolean;
   hidden: boolean;
@@ -137,7 +138,7 @@ function PerformerTile({
   );
 }
 
-export function CryptoStatsRow({
+export function CryptoStatsRow({ currency,
   holdings,
   isLoading,
   hidden,
@@ -161,7 +162,7 @@ export function CryptoStatsRow({
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
       <StatTile label={t("crypto.stats.allTimeProfit")}>
         <p className="text-lg font-semibold tabular-nums" style={{ color: profitColor }}>
-          {maskAmount(`${totals.totalProfitLoss >= 0 ? "+" : ""}${formatCurrency(totals.totalProfitLoss)}`, hidden)}
+          {maskAmount(`${totals.totalProfitLoss >= 0 ? "+" : ""}${formatCurrency(totals.totalProfitLoss, currency)}`, hidden)}
         </p>
         {totals.totalProfitLossPercent !== null && (
           <p className="mt-0.5 text-sm font-medium tabular-nums" style={{ color: profitColor }}>
@@ -173,7 +174,7 @@ export function CryptoStatsRow({
 
       <StatTile label={t("crypto.stats.costBasis")}>
         <p className="text-lg font-semibold tabular-nums text-text-primary">
-          {maskAmount(formatCurrency(totals.totalCostBasis), hidden)}
+          {maskAmount(formatCurrency(totals.totalCostBasis, currency), hidden)}
         </p>
         <p className="mt-0.5 text-xs text-text-muted">{t("crypto.stats.costBasisHint")}</p>
       </StatTile>

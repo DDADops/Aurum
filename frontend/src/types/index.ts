@@ -56,11 +56,14 @@ export interface Account {
 // never carries. Keep the two separate rather than making `balance` optional
 // on `Account`, so a stray `tx.account.balance` read is a compile error, not
 // a silent `undefined` at runtime.
-export interface AccountWithBalance extends Account {
-  balance: string;
+export interface AccountWithBalance extends Account, FinancialDataStatus {
+  balance: string | null;
+  has_monetary_history: boolean;
 }
 
 export interface AccountInput {
+  currency: string;
+  color?: string | null;
   name: string;
   type: AccountType;
 }
@@ -165,6 +168,7 @@ export interface TransactionInput {
 }
 
 export interface RecurringTransaction {
+  amount_currency: string | null;
   id: number;
   account_id: number;
   account_name: string;
@@ -238,6 +242,8 @@ export type CapitalRole = "income" | "neutral" | "drain";
 export type RiskLevel = "low" | "medium" | "high";
 
 export interface Asset {
+  valuation_currency: string | null;
+  valuation_currency_confirmed: boolean;
   id: number;
   name: string;
   asset_class: AssetClass;
@@ -389,6 +395,7 @@ export interface CategoryRankingReport extends FinancialResponseStatus {
 }
 
 export interface Goal {
+  currency: string;
   id: number;
   name: string;
   target_amount: string;
@@ -412,6 +419,7 @@ export interface GoalContributionInput {
 }
 
 export interface Budget {
+  currency: string;
   id: number;
   category_id: number;
   category_name: string;
@@ -426,6 +434,7 @@ export interface BudgetInput {
 }
 
 export interface BudgetStatus {
+  currency: string;
   budget_id: number;
   category_id: number;
   category_name: string;
@@ -475,6 +484,8 @@ export interface CryptoPortfolioInput {
 }
 
 export interface CryptoHolding {
+  currency: string;
+  last_price_currency: string | null;
   asset_id: number;
   portfolio_id: number;
   coingecko_id: string;
@@ -536,6 +547,7 @@ export interface CryptoHoldingUpdateInput {
 }
 
 export interface CryptoTransaction {
+  quote_currency: string | null;
   id: number;
   asset_id: number;
   type: CryptoTransactionType;
@@ -554,6 +566,7 @@ export interface CryptoTransactionInput {
 }
 
 export interface CryptoSyncResult {
+  currency: string;
   synced: boolean;
   last_synced_at: string | null;
   error_key: "unreachable" | null;
@@ -590,6 +603,7 @@ export interface CryptoHistoryPoint {
 }
 
 export interface CryptoHistoryResponse {
+  currency: string;
   range: CryptoRange;
   current: string;
   change_amount: string;

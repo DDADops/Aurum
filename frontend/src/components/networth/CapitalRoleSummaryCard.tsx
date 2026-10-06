@@ -28,7 +28,8 @@ export function CapitalRoleSummaryCard({ currency, roles, isLoading }: CapitalRo
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             {roles.map((role) => {
-              const cashFlow = Number(role.monthly_cash_flow);
+              const cashFlow = role.monthly_cash_flow;
+              const positive = !cashFlow.startsWith("-");
               return (
                 <div key={role.role} className="rounded-lg border border-border p-3.5">
                   <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-text-muted">
@@ -42,12 +43,12 @@ export function CapitalRoleSummaryCard({ currency, roles, isLoading }: CapitalRo
                     {role.count} {assetsCountLabel(role.count, language)} ·{" "}
                     {t(`netWorth.capitalRoleHint.${role.role}` as TranslationKey)}
                   </p>
-                  {cashFlow !== 0 && (
+                  {!/^[-+]?0(?:\.0+)?$/.test(cashFlow) && (
                     <p
                       className="mt-1.5 text-sm font-medium tabular-nums"
-                      style={{ color: cashFlow > 0 ? "var(--success)" : "var(--danger)" }}
+                      style={{ color: positive ? "var(--success)" : "var(--danger)" }}
                     >
-                      {cashFlow > 0 ? "+" : ""}
+                      {positive ? "+" : ""}
                       {formatCurrency(cashFlow, currency)}
                       {t("common.perMonth")}
                     </p>

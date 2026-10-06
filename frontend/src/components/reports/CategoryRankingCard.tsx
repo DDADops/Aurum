@@ -26,7 +26,8 @@ export function CategoryRankingCard({ currency, items, isLoading, selectedCatego
   // The subcategory breakdown lives in a modal, not expanded inline — a
   // category with many subcategories would otherwise push the whole ranking
   // list taller and shift every row below it.
-  const [breakdownItem, setBreakdownItem] = useState<CategoryRankingItem | null>(null);
+  const [breakdownId, setBreakdownId] = useState<number | null>(null);
+  const breakdownItem = items.find((item) => item.category_id === breakdownId) ?? null;
 
   return (
     <Card>
@@ -60,7 +61,7 @@ export function CategoryRankingCard({ currency, items, isLoading, selectedCatego
                         <button
                           type="button"
                           aria-label={t("common.expand")}
-                          onClick={() => setBreakdownItem(item)}
+                          onClick={() => setBreakdownId(item.category_id)}
                           className="rounded-md p-1.5 text-text-muted hover:text-text-primary"
                         >
                           <SquareDivide size={14} />
@@ -108,7 +109,7 @@ export function CategoryRankingCard({ currency, items, isLoading, selectedCatego
       {breakdownItem && (
         <CategoryBreakdownModal currency={currency}
           open
-          onClose={() => setBreakdownItem(null)}
+          onClose={() => setBreakdownId(null)}
           categoryId={breakdownItem.category_id}
           categoryName={breakdownItem.name}
           totalAmount={breakdownItem.amount}

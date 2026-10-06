@@ -1,3 +1,4 @@
+import { analyticsAvailable } from "@/lib/analytics";
 import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -146,7 +147,7 @@ export function ReportsPage() {
 
       <CategorySpendingChart report={report} isLoading={isReportLoading} />
 
-      {ranking?.complete === false ? <FinancialDataStatus status={ranking} /> : <CategoryRankingCard currency={ranking?.currency}
+      {!isRankingLoading && !analyticsAvailable(ranking, ranking?.currency) ? <FinancialDataStatus status={ranking?.currency ? ranking : undefined} /> : <CategoryRankingCard currency={ranking?.currency}
         items={ranking?.items ?? []}
         isLoading={isRankingLoading}
         selectedCategoryId={categoryId}

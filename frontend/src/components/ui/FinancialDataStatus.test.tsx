@@ -47,7 +47,7 @@ describe("FinancialDataStatus", () => {
   it.each(["absent", "stale", "precision_unrepresentable"] as const)("represents %s FX", (reason) => {
     const text = render({ ...complete, complete: false, missing_rates: [{ ...rate, reason }] });
     expect(text).toContain("Financial data is incomplete");
-    expect(text).toContain(reason === "stale" ? "Exchange rate is too old" : "Exchange rate unavailable");
+    expect(text).toContain(reason === "stale" ? "Exchange rate is too old" : reason === "precision_unrepresentable" ? "Exchange rate cannot be represented at the supported precision" : "Exchange rate unavailable");
   });
 
   it("bounds multiple issues and safely handles future codes", () => {

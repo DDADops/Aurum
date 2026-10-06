@@ -1,3 +1,4 @@
+import { analyticsValue, analyticsCoordinate, metricStatus } from "@/lib/analytics";
 import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -41,26 +42,26 @@ function computeYearTicks(keys: string[]): string[] {
   return ticks;
 }
 
-function ChartTooltip({ active, payload, currency }: { currency: string | undefined; active?: boolean; payload?: Array<{ payload: { key: string; amount: number } }> }) {
+function ChartTooltip({ active, payload, currency }: { currency: string | undefined; active?: boolean; payload?: Array<{ payload: { key: string; amount: number | null; original: string | null } }> }) {
+  const { t } = useTranslation();
   if (!active || !payload?.length) return null;
   const point = payload[0].payload;
   return (
     <div className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-sm shadow-md">
       <p className="text-text-muted">{formatMonthLabel(point.key)}</p>
-      <p className="font-medium text-text-primary">{formatCurrency(point.amount, currency)}</p>
+      <p className="font-medium text-text-primary">{point.original === null ? t("financial.unknown") : formatCurrency(point.original, currency)}</p>
     </div>
   );
 }
 
 export function CategorySpendingChart({ report, isLoading }: CategorySpendingChartProps) {
   const { t, language } = useTranslation();
-  if (report && (!report.complete || report.total_amount === null || report.average_per_month === null)) {
-    return <FinancialDataStatus status={report} />;
-  }
-
+  const total = analyticsValue(report?.total_amount, metricStatus(report, "total_amount"), report?.currency);
+  const average = analyticsValue(report?.average_per_month, metricStatus(report, "average_per_month"), report?.currency);
   const chartData = report?.series.map((point) => ({
     key: monthKey(point.year, point.month),
-    amount: Number(point.amount),
+    amount: analyticsCoordinate(point.amount, point, report.currency),
+    original: analyticsValue(point.amount, point, report.currency),
   })) ?? [];
   const yearTicks = computeYearTicks(chartData.map((point) => point.key));
 
@@ -70,21 +71,23 @@ export function CategorySpendingChart({ report, isLoading }: CategorySpendingCha
         <div>
           <CardTitle>{report ? translateCategoryName(report.category_name) : t("reports.defaultChartTitle")}</CardTitle>
           <p className="mt-1.5 text-2xl font-semibold tabular-nums text-text-primary sm:text-[28px]">
-            {isLoading || !report ? "…" : (report.total_amount === null ? t("financial.unknown") : formatCurrency(report.total_amount, report.currency))}
+            {isLoading || !report ? "…" : (total === null ? t("financial.unknown") : formatCurrency(total, report.currency))}
           </p>
           {report && (
             <p className="mt-1 text-sm text-text-muted">
-              {t("reports.averagePerMonth", { amount: (report.average_per_month === null ? t("financial.unknown") : formatCurrency(report.average_per_month, report.currency)) })} ·{" "}
+              {t("reports.averagePerMonth", { amount: (average === null ? t("financial.unknown") : formatCurrency(average, report.currency)) })} ·{" "}
               {report.transaction_count} {transactionsCountLabel(report.transaction_count, language)}
             </p>
           )}
         </div>
       </CardHeader>
+      {report && <FinancialDataStatus status={report.currency ? report : undefined} className="px-5" />}
+      {chartData.some((point) => point.amount === null) && <p className="px-5 text-sm text-text-muted">{t("financial.chartGaps")}</p>}
       <CardContent>
         <div className="h-56 w-full sm:h-64">
           {isLoading || !report || chartData.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-text-muted">
-              {isLoading ? t("common.loading") : t("reports.noDataForPeriod")}
+              {isLoading ? t("common.loading") : report && !report.complete ? t("financial.unknown") : t("reports.noDataForPeriod")}
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">

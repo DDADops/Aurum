@@ -1,3 +1,5 @@
+import { metricStatus } from "@/lib/analytics";
+import { isFinancialDataIncomplete } from "@/lib/financialData";
 import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { TriangleAlert } from "lucide-react";
 import { useFinancialAlerts } from "@/hooks/useInsights";
@@ -42,14 +44,16 @@ interface AlertBannerProps {
 export function AlertBanner({ excludeKeys }: AlertBannerProps = {}) {
   const { data } = useFinancialAlerts();
   const { t } = useTranslation();
-  const alerts = (data?.alerts ?? []).filter((alert) => !excludeKeys?.includes(alert.key));
+  const alerts = (data?.alerts ?? []).filter((alert) => {
+    const status = metricStatus(data, alert.key);
+    return !excludeKeys?.includes(alert.key) && status && !isFinancialDataIncomplete(status);
+  });
 
-  if (data?.complete === false) return <FinancialDataStatus status={data} />;
-
-  if (alerts.length === 0) return null;
+  if (alerts.length === 0 && data?.complete !== false) return null;
 
   return (
     <div className="space-y-2">
+      {data && <FinancialDataStatus status={data} />}
       {alerts.map((alert) => (
         <div
           key={alert.key}

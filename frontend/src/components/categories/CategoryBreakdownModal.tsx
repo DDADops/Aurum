@@ -1,3 +1,4 @@
+import { displayPercent } from "@/lib/analytics";
 import { Dialog } from "@/components/ui/Dialog";
 import { getCategoryIcon } from "@/lib/icons";
 import { formatCurrency } from "@/lib/format";
@@ -38,7 +39,6 @@ export function CategoryBreakdownModal({ currency,
   children,
 }: CategoryBreakdownModalProps) {
   const { t } = useTranslation();
-  const total = Number(totalAmount);
 
   return (
     <Dialog open={open} onClose={onClose} title={translateCategoryName(categoryName)}>
@@ -49,7 +49,7 @@ export function CategoryBreakdownModal({ currency,
       <ul className="divide-y divide-gridline">
         {children.map((child) => {
           const Icon = getCategoryIcon(child.icon);
-          const percent = total ? (Number(child.amount) / total) * 100 : 0;
+          const percent = currency ? displayPercent(child.amount, totalAmount) : null;
           const label = child.category_id === categoryId ? t("reports.directSpendLabel") : translateCategoryName(child.name);
           return (
             <li key={child.category_id} className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0">
@@ -61,7 +61,7 @@ export function CategoryBreakdownModal({ currency,
               </span>
               <span className="min-w-0 flex-1 truncate text-sm text-text-primary">{label}</span>
               <span className="w-9 shrink-0 text-right text-xs text-text-muted tabular-nums">
-                {percent.toFixed(0)}%
+                {percent === null ? t("financial.unknown") : `${percent}%`}
               </span>
               <span className="shrink-0 text-sm font-medium tabular-nums text-text-primary">
                 {formatCurrency(child.amount, currency)}

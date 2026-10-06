@@ -1,3 +1,5 @@
+import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
+import { analyticsAvailable, analyticsValue, metricStatus } from "@/lib/analytics";
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -49,13 +51,19 @@ export function NetWorthPage() {
 
       <NetWorthChart summary={summary} isLoading={isSummaryLoading} range={range} onRangeChange={setRange} />
 
-      {summary?.complete !== false && <>
-      <AssetAllocationCard currency={summary?.currency} breakdown={summary?.breakdown ?? []} isLoading={isSummaryLoading} />
+      <>
+      {!isSummaryLoading && !analyticsAvailable(metricStatus(summary, "breakdown"), summary?.currency)
+        ? <FinancialDataStatus status={summary?.currency ? metricStatus(summary, "breakdown") : undefined} />
+        : <AssetAllocationCard total={analyticsValue(summary?.current, metricStatus(summary, "current"), summary?.currency)} currency={summary?.currency} breakdown={summary?.breakdown ?? []} isLoading={isSummaryLoading} />}
 
-      <CapitalRoleSummaryCard currency={summary?.currency} roles={summary?.capital_roles ?? []} isLoading={isSummaryLoading} />
+      {!isSummaryLoading && !analyticsAvailable(metricStatus(summary, "capital_roles"), summary?.currency)
+        ? <FinancialDataStatus status={summary?.currency ? metricStatus(summary, "capital_roles") : undefined} />
+        : <CapitalRoleSummaryCard currency={summary?.currency} roles={summary?.capital_roles ?? []} isLoading={isSummaryLoading} />}
 
-      <RiskAllocationCard currency={summary?.currency} riskLevels={summary?.risk_levels ?? []} isLoading={isSummaryLoading} />
-      </>}
+      {!isSummaryLoading && !analyticsAvailable(metricStatus(summary, "risk_levels"), summary?.currency)
+        ? <FinancialDataStatus status={summary?.currency ? metricStatus(summary, "risk_levels") : undefined} />
+        : <RiskAllocationCard currency={summary?.currency} riskLevels={summary?.risk_levels ?? []} isLoading={isSummaryLoading} />}
+      </>
 
       <Card>
         <CardHeader>

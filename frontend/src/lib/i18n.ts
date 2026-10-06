@@ -7,6 +7,8 @@ const STORAGE_KEY = "aurum:language";
 const ru = {
   "financial.incomplete": "Финансовые данные неполны",
   "financial.rateUnavailable": "Курс валют недоступен",
+  "financial.ratePrecision": "Курс нельзя представить с допустимой точностью",
+  "financial.chartGaps": "Периоды с неполными данными показаны пропусками, а не нулями.",
   "financial.rateStale": "Курс валют устарел",
   "financial.reconciliation": "Финансовая запись требует уточнения",
   "financial.valuationUnavailable": "Оценка стоимости недоступна",
@@ -551,6 +553,8 @@ const ru = {
 const en: Record<keyof typeof ru, string> = {
   "financial.incomplete": "Financial data is incomplete",
   "financial.rateUnavailable": "Exchange rate unavailable",
+  "financial.ratePrecision": "Exchange rate cannot be represented at the supported precision",
+  "financial.chartGaps": "Periods with incomplete data appear as gaps, not zeros.",
   "financial.rateStale": "Exchange rate is too old",
   "financial.reconciliation": "Financial record requires reconciliation",
   "financial.valuationUnavailable": "Valuation unavailable",

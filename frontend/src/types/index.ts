@@ -336,10 +336,10 @@ export interface NetWorthSummary extends FinancialResponseStatus {
   risk_levels: RiskLevelSummary[];
 }
 
-export interface CategorySpendingPoint {
+export interface CategorySpendingPoint extends FinancialDataStatus {
   year: number;
   month: number;
-  amount: string;
+  amount: string | null;
 }
 
 export interface CategorySpendingReport extends FinancialResponseStatus {
@@ -355,12 +355,13 @@ export interface CategorySpendingReport extends FinancialResponseStatus {
   series: CategorySpendingPoint[];
 }
 
-export interface CashFlowPoint {
+export interface CashFlowPoint extends FinancialDataStatus {
+  metric_status?: MetricStatus<"income" | "expense" | "net">;
   year: number;
   month: number;
-  income: string;
-  expense: string;
-  net: string;
+  income: string | null;
+  expense: string | null;
+  net: string | null;
 }
 
 export interface CashFlowResponse extends FinancialResponseStatus {

@@ -1,5 +1,5 @@
 import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
-import { financialChartValue, knownFinancialValue } from "@/lib/financialData";
+import { analyticsValue, analyticsCoordinate, metricStatus } from "@/lib/analytics";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -41,25 +41,25 @@ function computeYearTicks(dates: string[]): string[] {
   return ticks;
 }
 
-function ChartTooltip({ active, payload, currency }: { currency: string | undefined; active?: boolean; payload?: Array<{ payload: { date: string; value: number | null } }> }) {
+function ChartTooltip({ active, payload, currency }: { currency: string | undefined; active?: boolean; payload?: Array<{ payload: { date: string; value: number | null; original: string | null } }> }) {
   if (!active || !payload?.length) return null;
   const point = payload[0].payload;
   if (point.value === null) return null;
   return (
     <div className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-sm shadow-md">
       <p className="text-text-muted">{formatAxisDate(point.date)}</p>
-      <p className="font-medium text-text-primary">{formatCurrency(point.value, currency)}</p>
+      <p className="font-medium text-text-primary">{formatCurrency(point.original!, currency)}</p>
     </div>
   );
 }
 
 export function NetWorthChart({ summary, isLoading, range, onRangeChange }: NetWorthChartProps) {
   const { t } = useTranslation();
-  const current = knownFinancialValue(summary?.current, summary);
-  const change = financialChartValue(summary?.change_amount, summary);
-  const isPositive = change !== null && change >= 0;
+  const current = analyticsValue(summary?.current, metricStatus(summary, "current"), summary?.currency);
+  const change = analyticsValue(summary?.change_amount, metricStatus(summary, "change_amount"), summary?.currency);
+  const isPositive = change !== null && !change.startsWith("-");
   const trendColor = change === null ? "var(--text-muted)" : isPositive ? "var(--success)" : "var(--danger)";
-  const chartData = summary?.series.map((point) => ({ date: point.date, value: financialChartValue(point.value, point) })) ?? [];
+  const chartData = summary?.series.map((point) => ({ date: point.date, value: analyticsCoordinate(point.value, point, summary.currency), original: analyticsValue(point.value, point, summary.currency) })) ?? [];
   const yearTicks = computeYearTicks(chartData.map((point) => point.date));
 
   return (
@@ -85,6 +85,8 @@ export function NetWorthChart({ summary, isLoading, range, onRangeChange }: NetW
         <RangeSelector value={range} onChange={onRangeChange} />
       </CardHeader>
       {summary && !summary.complete && <FinancialDataStatus status={summary} className="px-5" />}
+      {summary && <FinancialDataStatus status={summary.currency ? metricStatus(summary, "change_amount") : undefined} className="px-5" />}
+      {chartData.some((point) => point.value === null) && <p className="px-5 text-sm text-text-muted">{t("financial.chartGaps")} <FinancialDataStatus status={metricStatus(summary, "series")} /></p>}
       <CardContent>
         <div className="h-56 w-full sm:h-64">
           {isLoading || chartData.length === 0 ? (

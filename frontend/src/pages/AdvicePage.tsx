@@ -1,3 +1,5 @@
+import { analyticsValue, metricStatus } from "@/lib/analytics";
+import { isFinancialDataIncomplete } from "@/lib/financialData";
 import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { Lightbulb, TrendingUp, TriangleAlert } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -23,22 +25,29 @@ const TONE_ICONS: Record<AdviceItem["tone"], typeof Lightbulb> = {
 // some params (amounts) must be currency-formatted and category names
 // translated before interpolation — unlike AlertBanner's alerts, which only
 // ever interpolate raw numbers.
-function adviceMessage(item: AdviceItem, t: ReturnType<typeof useTranslation>["t"]): string {
+function adviceMessage(item: AdviceItem, t: ReturnType<typeof useTranslation>["t"], currency: string | undefined): string {
+  const money = (key: string) => {
+    const value = typeof item.params[key] === "string" ? item.params[key] : null;
+    // Monetary advice has explicit param provenance. Never relabel a mismatch.
+    const known = analyticsValue(value, { complete: true, missing_rates: [], data_issues: [] }, currency);
+    return known === null || item.params.currency !== currency ? t("financial.unknown") : formatCurrency(known, currency);
+  };
   switch (item.key) {
     case "rising_category":
       return t("advice.risingCategory", {
         category: translateCategoryName(String(item.params.category)),
         percent: item.params.percent,
-        current: formatCurrency(item.params.current, typeof item.params.currency === "string" ? item.params.currency : undefined),
-        average: formatCurrency(item.params.average, typeof item.params.currency === "string" ? item.params.currency : undefined),
+        current: money("current"),
+        average: money("average"),
       });
     case "unbudgeted_top_category":
       return t("advice.unbudgetedTopCategory", {
         category: translateCategoryName(String(item.params.category)),
-        amount: formatCurrency(item.params.amount, typeof item.params.currency === "string" ? item.params.currency : undefined),
+        amount: money("amount"),
       });
     case "savings_rate_trend": {
-      const diff = Number(item.params.diff);
+      const diff = typeof item.params.diff === "number" && Number.isFinite(item.params.diff) ? item.params.diff : null;
+      if (diff === null || item.params.rate == null) return t("financial.unknown");
       return t("advice.savingsRateTrend", { rate: item.params.rate, diff: `${diff > 0 ? "+" : ""}${diff}` });
     }
     default:
@@ -49,7 +58,10 @@ function adviceMessage(item: AdviceItem, t: ReturnType<typeof useTranslation>["t
 export function AdvicePage() {
   const { t } = useTranslation();
   const { data, isLoading } = useAdvice();
-  const items = data?.items ?? [];
+  const items = (data?.items ?? []).filter((item) => {
+    const status = metricStatus(data, item.key);
+    return status && !isFinancialDataIncomplete(status);
+  });
 
   return (
     <div className="space-y-5">
@@ -58,12 +70,11 @@ export function AdvicePage() {
           <CardTitle>{t("nav.advice")}</CardTitle>
         </CardHeader>
         <CardContent>
+          {data && <FinancialDataStatus status={data} />}
           {isLoading ? (
             <p className="py-10 text-center text-sm text-text-muted">{t("common.loading")}</p>
-          ) : data?.complete === false ? (
-            <FinancialDataStatus status={data} />
           ) : items.length === 0 ? (
-            <p className="py-10 text-center text-sm text-text-muted">{t("advice.empty")}</p>
+            <p className="py-10 text-center text-sm text-text-muted">{data?.complete === false ? t("financial.unknown") : t("advice.empty")}</p>
           ) : (
             <div className="space-y-2">
               {items.map((item) => {
@@ -74,7 +85,7 @@ export function AdvicePage() {
                     className={`flex items-start gap-2.5 rounded-lg border px-4 py-3 text-sm ${TONE_STYLES[item.tone]}`}
                   >
                     <Icon size={16} className="mt-0.5 shrink-0" />
-                    <span>{adviceMessage(item, t)}</span>
+                    <span>{adviceMessage(item, t, data?.currency)}</span>
                   </div>
                 );
               })}

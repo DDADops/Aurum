@@ -7,6 +7,7 @@ import type { NetWorthBreakdownItem } from "@/types";
 interface AssetAllocationCardProps {
   currency: string | undefined;
   breakdown: NetWorthBreakdownItem[];
+  total: string | null;
   isLoading: boolean;
 }
 
@@ -17,15 +18,14 @@ function breakdownLabelKey(key: string): TranslationKey {
   return `netWorth.assetClass.${key}` as TranslationKey;
 }
 
-export function AssetAllocationCard({ currency, breakdown, isLoading }: AssetAllocationCardProps) {
+export function AssetAllocationCard({ currency, breakdown, total, isLoading }: AssetAllocationCardProps) {
   const { t } = useTranslation();
-  const total = breakdown.reduce((sum, item) => sum + Number(item.amount), 0);
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>
-          {t("netWorth.assetsTitlePrefix")} · {formatCurrency(total, currency)}
+          {t("netWorth.assetsTitlePrefix")} · {total === null ? t("financial.unknown") : formatCurrency(total, currency)}
         </CardTitle>
       </CardHeader>
       <CardContent>

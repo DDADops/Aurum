@@ -33,11 +33,12 @@ export function SpendingByCategoryCard({ currency, items }: SpendingByCategoryCa
   // many subcategories (or many split purchases) would otherwise push this
   // row taller than the fixed-height donut next to it, throwing the
   // side-by-side layout out of alignment.
-  const [breakdownItem, setBreakdownItem] = useState<CategoryBreakdownItem | null>(null);
+  const [breakdownId, setBreakdownId] = useState<number | null>(null);
+  const breakdownItem = items.find((item) => item.category_id === breakdownId) ?? null;
   const hasData = items.length > 0;
-  // Recharts needs a numeric dataKey — API amounts arrive as strings (Decimal
-  // is serialized as string to avoid float precision loss).
-  const chartData = items.map((item) => ({ ...item, amount: Number(item.amount) }));
+  // The backend supplies the complete rollup percentages; no monetary
+  // conversion or local aggregation is needed to size the donut.
+  const chartData = items;
 
   return (
     <Card>
@@ -54,7 +55,7 @@ export function SpendingByCategoryCard({ currency, items }: SpendingByCategoryCa
                 <PieChart>
                   <Pie
                     data={chartData}
-                    dataKey="amount"
+                    dataKey="percent"
                     nameKey="name"
                     innerRadius="62%"
                     outerRadius="100%"
@@ -87,7 +88,7 @@ export function SpendingByCategoryCard({ currency, items }: SpendingByCategoryCa
                         <button
                           type="button"
                           aria-label={t("common.expand")}
-                          onClick={() => setBreakdownItem(item)}
+                          onClick={() => setBreakdownId(item.category_id)}
                           className="rounded-md p-0.5 text-text-muted hover:bg-surface-2 hover:text-text-primary"
                         >
                           <SquareDivide size={15} />
@@ -117,7 +118,7 @@ export function SpendingByCategoryCard({ currency, items }: SpendingByCategoryCa
       {breakdownItem && breakdownItem.category_id !== null && (
         <CategoryBreakdownModal currency={currency}
           open
-          onClose={() => setBreakdownItem(null)}
+          onClose={() => setBreakdownId(null)}
           categoryId={breakdownItem.category_id}
           categoryName={breakdownItem.name}
           totalAmount={breakdownItem.amount}

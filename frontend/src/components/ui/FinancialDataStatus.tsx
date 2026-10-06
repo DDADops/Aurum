@@ -16,7 +16,7 @@ export function FinancialDataStatus({ status, className }: FinancialDataStatusPr
 
   const reasons: TranslationKey[] = [];
   for (const rate of status?.missing_rates ?? []) {
-    reasons.push(rate.reason === "stale" ? "financial.rateStale" : "financial.rateUnavailable");
+    reasons.push(rate.reason === "stale" ? "financial.rateStale" : rate.reason === "precision_unrepresentable" ? "financial.ratePrecision" : "financial.rateUnavailable");
   }
   for (const issue of status?.data_issues ?? []) {
     reasons.push(issue.code === "valuation_missing" || issue.code === "price_missing"

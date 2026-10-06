@@ -1,5 +1,5 @@
 import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
-import { financialChartValue, knownFinancialValue } from "@/lib/financialData";
+import { analyticsValue, analyticsAvailable, metricStatus, displayPercent } from "@/lib/analytics";
 import { useState } from "react";
 import { MonthSelector } from "@/components/layout/MonthSelector";
 import { YearSelector } from "@/components/layout/YearSelector";
@@ -12,17 +12,6 @@ import { useTransactionYears } from "@/hooks/useTransactions";
 import { formatCurrency, formatSignedCurrency } from "@/lib/format";
 import { useTranslation } from "@/lib/i18n";
 
-/** Share of income left over after spending (net / real_income). `null` when
- * there was no income to take a share of, rather than a misleading 0%. */
-function savingsRate(realIncome: number, net: number): number | null {
-  return realIncome > 0 ? (net / realIncome) * 100 : null;
-}
-
-function formatPercent(value: number): string {
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${value.toFixed(0)}%`;
-}
-
 export function DashboardPage() {
   const { t } = useTranslation();
   const now = new Date();
@@ -31,12 +20,11 @@ export function DashboardPage() {
   const { data: years } = useTransactionYears();
 
   const { data, isLoading, isError } = useDashboardSummary(year, month);
-  const income = knownFinancialValue(data?.real_income, data?.metric_status?.real_income ?? data);
-  const spent = knownFinancialValue(data?.spent, data?.metric_status?.spent ?? data);
-  const net = knownFinancialValue(data?.net, data?.metric_status?.net ?? data);
-  const incomeNumber = financialChartValue(income);
-  const netNumber = financialChartValue(net);
-  const rate = incomeNumber !== null && netNumber !== null ? savingsRate(incomeNumber, netNumber) : null;
+  const income = analyticsValue(data?.real_income, metricStatus(data, "real_income"), data?.currency);
+  const spent = analyticsValue(data?.spent, metricStatus(data, "spent"), data?.currency);
+  const net = analyticsValue(data?.net, metricStatus(data, "net"), data?.currency);
+  const rate = displayPercent(net, income);
+  const categoryStatus = metricStatus(data, "spending_by_category");
 
   return (
     <div className="space-y-5">
@@ -74,19 +62,19 @@ export function DashboardPage() {
           label={t("dashboard.statNetLabel")}
           value={isLoading ? "…" : net === null ? t("financial.unknown") : formatSignedCurrency(net, data?.currency)}
           caption={t("dashboard.statNetCaption")}
-          tone={netNumber === null ? "default" : netNumber >= 0 ? "success" : "danger"}
+          tone={net === null ? "default" : net.startsWith("-") ? "danger" : "success"}
         />
         <StatCard
           label={t("dashboard.statSavingsRateLabel")}
-          value={isLoading ? "…" : rate === null ? "—" : formatPercent(rate)}
+          value={isLoading ? "…" : rate === null ? "—" : `${rate !== "0" && !rate.startsWith("-") ? "+" : ""}${rate}%`}
           caption={t("dashboard.statSavingsRateCaption")}
-          tone={rate === null ? "default" : rate >= 0 ? "success" : "danger"}
+          tone={rate === null ? "default" : rate.startsWith("-") ? "danger" : "success"}
         />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
-        {data?.metric_status?.spending_by_category?.complete === false ? (
-          <FinancialDataStatus status={data.metric_status.spending_by_category} />
+        {!isLoading && !analyticsAvailable(categoryStatus, data?.currency) ? (
+          <FinancialDataStatus status={data?.currency ? categoryStatus : undefined} />
         ) : <SpendingByCategoryCard currency={data?.currency} items={data?.spending_by_category ?? []} />}
         <RecentTransactionsCard year={year} month={month} />
       </div>

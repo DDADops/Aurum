@@ -174,6 +174,7 @@ async def test_legacy_refresh_conflict_and_backup_unknown(client, test_sessionma
     monkeypatch.setattr(crypto, "_fetch_market_data", _fake_fetch({"bitcoin": _point("50000")}))
     id_ = (await _add_bitcoin(client))["asset_id"]
     backup = (await client.get("/backup/export")).json()
+    backup["aurum_backup_version"] = 1
     assert (await client.post("/backup/import", json=backup)).status_code == 200
     before = await cache(test_sessionmaker, id_)
     assert before == (Decimal("50000"), None, None)

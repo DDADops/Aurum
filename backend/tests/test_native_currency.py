@@ -272,7 +272,7 @@ async def test_migration_missing_settings_uses_frozen_default(test_sessionmaker,
         migrate("upgrade", "head")
 
 
-async def test_backup_v1_extension_preserves_authoritative_and_unresolved_fields(client, account_id, categories):
+async def test_backup_versions_preserve_authoritative_and_unresolved_fields(client, account_id, categories):
     destination = await new_account(client, "VND")
     response = await client.post("/transactions", json=txn_payload(
         account_id, type="transfer", transfer_account_id=destination, amount="1", transfer_amount="25000.123456"))
@@ -282,12 +282,13 @@ async def test_backup_v1_extension_preserves_authoritative_and_unresolved_fields
     await template(client, account_id, type="transfer", transfer_account_id=destination,
                    amount_currency="USD", transfer_amount="25000.123456", transfer_amount_currency="VND")
     original = (await client.get("/backup/export")).json()
-    assert original["aurum_backup_version"] == 1
+    assert original["aurum_backup_version"] == 2
     assert Decimal(original["transactions"][0]["transfer_amount"]) == Decimal("25000.123456")
     assert (await client.post("/backup/import", json=original)).status_code == 200
     restored = (await client.get("/backup/export")).json()
     for key in ("transactions", "budgets", "goals", "recurring_transactions"):
         assert restored[key] == original[key]
+    original["aurum_backup_version"] = 1
     # Old files omit the fields. Infer only known same-currency transfers;
     # cross-currency amounts stay unresolved, and use the backup's settings.
     for row in original["transactions"]:
@@ -306,7 +307,7 @@ async def test_backup_v1_extension_preserves_authoritative_and_unresolved_fields
     assert restored["recurring_transactions"][0]["amount_currency"] == "USD"
     assert restored["recurring_transactions"][0]["transfer_amount"] is None
     assert restored["recurring_transactions"][0]["transfer_amount_currency"] == "VND"
-    # Explicit null in an extended v1 file must never be filled as 1:1.
+    # Explicit null in v2 must never be filled as 1:1.
     restored["accounts"] = [{**row, "currency": "USD"} for row in restored["accounts"]]
     assert (await client.post("/backup/import", json=restored)).status_code == 200
     assert (await client.get("/backup/export")).json()["transactions"][0]["transfer_amount"] is None
@@ -343,6 +344,7 @@ async def test_legacy_backup_same_currency_backfill(client, account_id):
     await client.post("/transactions", json=txn_payload(account_id, type="transfer", transfer_account_id=destination, amount="1.123456"))
     await template(client, account_id, type="transfer", transfer_account_id=destination)
     backup = (await client.get("/backup/export")).json()
+    backup["aurum_backup_version"] = 1
     backup["transactions"][0].pop("transfer_amount")
     for field in ("amount_currency", "transfer_amount", "transfer_amount_currency"):
         backup["recurring_transactions"][0].pop(field)

@@ -280,11 +280,11 @@ async def test_backup_roundtrip_preserves_holding_and_transaction_log(client: As
     assert restored["coingecko_id"] == "bitcoin"
     assert restored["asset_id"] == holding["asset_id"]
     assert money(restored["quantity"]) == money("2")
-    # Transitional v1 deliberately loses quote provenance; never guess it.
-    assert restored["avg_buy_price"] is None
-    assert restored["last_price_currency"] is None
-    assert restored["last_price_as_of_date"] is None
-    assert restored["value"] is None  # Stored number survives, its denomination does not.
+    # V2 retains persisted quote/cache provenance for derived reads.
+    assert money(restored["avg_buy_price"]) == money("50000")
+    assert restored["last_price_currency"] == "USD"
+    assert restored["last_price_as_of_date"] == payload["crypto_holdings"][0]["last_price_as_of_date"]
+    assert money(restored["value"]) == money("100000")
 
 
 async def test_backup_roundtrip_preserves_portfolio_assignment(client: AsyncClient, monkeypatch):
@@ -327,6 +327,7 @@ async def test_restoring_a_pre_portfolios_backup_falls_back_to_a_default_portfol
     holding = await _add_bitcoin(client, "1", "40000")
 
     payload = (await client.get("/backup/export")).json()
+    payload["aurum_backup_version"] = 1
     payload["crypto_portfolios"] = []
     payload["crypto_holdings"][0]["portfolio_id"] = None
 

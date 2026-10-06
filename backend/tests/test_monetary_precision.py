@@ -104,7 +104,7 @@ async def test_precision_backup_roundtrip_and_rejection(client, account_id):
     response = await client.post("/assets", json=dict(name="Precision", asset_class="other", value=value))
     assert response.status_code == 201
     payload = (await client.get("/backup/export")).json()
-    assert payload["aurum_backup_version"] == 1
+    assert payload["aurum_backup_version"] == 2
     response = await client.post("/backup/import", json=payload)
     assert response.status_code == 200, response.text
     restored = (await client.get("/backup/export")).json()

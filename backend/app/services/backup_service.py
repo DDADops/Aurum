@@ -1,100 +1,73 @@
-"""Full-database JSON backup & restore.
-
-Exports every row (accounts, categories, transactions, assets, asset
-valuations) as one portable JSON document a user can download from the
-browser and re-upload later. Restore fully REPLACES existing data — it's a
-snapshot restore, not a merge — so the whole operation runs in one DB
-transaction: a corrupt or incompatible file is rejected (referential checks
-run first, before any row is touched), and any failure during the swap rolls
-the database back to exactly where it was, so a bad file never leaves the
-app half-restored.
-"""
+"""Versioned, validated JSON snapshots. No provider calls or monetary repair."""
 import logging
+import re
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
-from sqlalchemy import delete, select, text
+from sqlalchemy import Enum, Integer, String, delete, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.config import APP_VERSION, get_settings
-from app.core.currency import normalize_currency
+from app.core.config import APP_VERSION
+from app.core.money import sum_money
 from app.models.account import Account
 from app.models.asset import Asset, AssetValuation
 from app.models.budget import Budget
 from app.models.category import Category
-from app.models.crypto import CryptoHolding, CryptoPortfolio, CryptoTransaction
+from app.models.crypto import CryptoHolding, CryptoPortfolio, CryptoSyncState, CryptoTransaction
 from app.models.enums import TransactionType
+from app.models.fx import FxRate
 from app.models.goal import Goal, GoalContribution
 from app.models.recurring import RecurringTransaction
 from app.models.settings import AppSettings
-from app.models.tag import Tag
+from app.models.tag import Tag, transaction_tags
 from app.models.transaction import Transaction, TransactionSplit
 from app.schemas.backup import (
-    AccountBackup,
-    AppSettingsBackup,
-    AssetBackup,
-    AssetValuationBackup,
-    BackupPayload,
-    BudgetBackup,
-    CategoryBackup,
-    CryptoHoldingBackup,
-    CryptoPortfolioBackup,
-    CryptoTransactionBackup,
-    GoalBackup,
-    GoalContributionBackup,
-    RecurringTransactionBackup,
-    TagBackup,
-    TransactionBackup,
-    TransactionSplitBackup,
+    BACKUP_ROWS, AppSettingsBackup, BackupPayload, CryptoSyncStateBackup,
+    RecurringTransactionBackup, TransactionBackup,
 )
+from app.schemas.transaction import split_rule_violation
 
 logger = logging.getLogger(__name__)
+BACKUP_FORMAT_VERSION = 2
 
-BACKUP_FORMAT_VERSION = 1
+# Explicit parent-before-child ordering. Association rows are inserted last.
+MODELS = (
+    Account, Category, Tag, Asset, CryptoPortfolio, Goal, Transaction,
+    TransactionSplit, AssetValuation, CryptoHolding, CryptoTransaction,
+    Budget, GoalContribution, RecurringTransaction, FxRate,
+)
+LOCK_TABLES = sorted([model.__tablename__ for model in MODELS] +
+                     ["transaction_tags", "app_settings", "crypto_sync_state"])
+
+
+async def _lock_dataset(session: AsyncSession, *, export: bool = False) -> None:
+    if session.get_bind().dialect.name == "postgresql":
+        mode = "SHARE" if export else "ACCESS EXCLUSIVE"
+        await session.execute(text(f"LOCK TABLE {', '.join(LOCK_TABLES)} IN {mode} MODE"))
 
 
 async def build_backup(session: AsyncSession) -> BackupPayload:
-    accounts = (await session.execute(select(Account))).scalars().all()
-    categories = (await session.execute(select(Category))).scalars().all()
-    tags = (await session.execute(select(Tag))).scalars().all()
-    transactions = (await session.execute(select(Transaction).options(selectinload(Transaction.tags)))).scalars().all()
-    transaction_splits = (await session.execute(select(TransactionSplit))).scalars().all()
-    assets = (await session.execute(select(Asset))).scalars().all()
-    valuations = (await session.execute(select(AssetValuation))).scalars().all()
-    crypto_portfolios = (await session.execute(select(CryptoPortfolio))).scalars().all()
-    crypto_holdings = (await session.execute(select(CryptoHolding))).scalars().all()
-    crypto_transactions = (await session.execute(select(CryptoTransaction))).scalars().all()
-    budgets = (await session.execute(select(Budget))).scalars().all()
-    goals = (await session.execute(select(Goal))).scalars().all()
-    goal_contributions = (await session.execute(select(GoalContribution))).scalars().all()
-    recurring_transactions = (await session.execute(select(RecurringTransaction))).scalars().all()
-    app_settings = await session.get(AppSettings, 1)
-
+    # A consistent whole-dataset read, even while financial writers run.
+    await _lock_dataset(session, export=True)
+    values = {}
+    for model in MODELS:
+        key = model.__tablename__
+        stmt = select(model).order_by(*model.__table__.primary_key.columns)
+        if model is Transaction:
+            stmt = stmt.options(selectinload(Transaction.tags))
+        rows = (await session.scalars(stmt)).all()
+        values[key] = [BACKUP_ROWS[key].model_validate(row) for row in rows]
+        if model is Transaction:
+            for original, backup in zip(rows, values[key]):
+                backup.tag_ids = sorted(tag.id for tag in original.tags)
+    settings = await session.get(AppSettings, 1)
+    sync = await session.get(CryptoSyncState, 1)
     return BackupPayload(
-        aurum_backup_version=BACKUP_FORMAT_VERSION,
-        exported_at=datetime.now(timezone.utc),
-        app_version=APP_VERSION,
-        accounts=[AccountBackup.model_validate(row) for row in accounts],
-        categories=[CategoryBackup.model_validate(row) for row in categories],
-        tags=[TagBackup.model_validate(row) for row in tags],
-        transactions=[
-            TransactionBackup.model_validate(row, from_attributes=True).model_copy(
-                update={"tag_ids": [tag.id for tag in row.tags]}
-            )
-            for row in transactions
-        ],
-        transaction_splits=[TransactionSplitBackup.model_validate(row) for row in transaction_splits],
-        assets=[AssetBackup.model_validate(row) for row in assets],
-        asset_valuations=[AssetValuationBackup.model_validate(row) for row in valuations],
-        crypto_portfolios=[CryptoPortfolioBackup.model_validate(row) for row in crypto_portfolios],
-        crypto_holdings=[CryptoHoldingBackup.model_validate(row) for row in crypto_holdings],
-        crypto_transactions=[CryptoTransactionBackup.model_validate(row) for row in crypto_transactions],
-        budgets=[BudgetBackup.model_validate(row) for row in budgets],
-        goals=[GoalBackup.model_validate(row) for row in goals],
-        goal_contributions=[GoalContributionBackup.model_validate(row) for row in goal_contributions],
-        recurring_transactions=[RecurringTransactionBackup.model_validate(row) for row in recurring_transactions],
-        app_settings=AppSettingsBackup.model_validate(app_settings) if app_settings else AppSettingsBackup(currency=get_settings().default_currency),
+        aurum_backup_version=BACKUP_FORMAT_VERSION, exported_at=datetime.now(timezone.utc), app_version=APP_VERSION,
+        app_settings=AppSettingsBackup.model_validate(settings) if settings else AppSettingsBackup(currency="USD"),
+        crypto_sync_state=CryptoSyncStateBackup.model_validate(sync) if sync else None,
+        **values,
     )
 
 
@@ -137,9 +110,8 @@ def _validate_references(payload: BackupPayload) -> None:
     for h in payload.crypto_holdings:
         if h.asset_id not in asset_ids:
             raise HTTPException(400, f"Crypto holding {h.asset_id} references unknown asset_id {h.asset_id}")
-        # portfolio_id is allowed to be None (a pre-portfolios backup) — that
-        # case is resolved to an auto-created fallback portfolio at restore
-        # time, not validated here.
+        # Historical NULL portfolios are resolved in pure v1 normalization.
+        # v2 NULL is rejected by the column nullability check below.
         if h.portfolio_id is not None and h.portfolio_id not in crypto_portfolio_ids:
             raise HTTPException(
                 400, f"Crypto holding {h.asset_id} references unknown portfolio_id {h.portfolio_id}"
@@ -170,184 +142,153 @@ def _validate_references(payload: BackupPayload) -> None:
             raise HTTPException(400, f"Recurring transaction {r.id} references unknown category_id {r.category_id}")
 
 
-async def _reset_sequence(session: AsyncSession, table: str, rows: list) -> None:
-    """Bulk-inserting rows with explicit ids doesn't advance the table's
-    identity sequence, so the next auto-generated id would collide — bump it
-    to max(id) after a restore. `table` is always one of our five hardcoded
-    table names, never user input."""
-    if not rows:
-        return
-    max_id = max(row.id for row in rows)
-    await session.execute(
-        text(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), :max_id)"), {"max_id": max_id}
-    )
+def _invalid(message: str) -> None:
+    raise HTTPException(400, message)
 
 
-def _native_values(payload: BackupPayload) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
-    """v1 extension: preserve explicit fields; infer only omitted legacy data.
+def _unique(rows, keys: tuple[str, ...], label: str) -> None:
+    seen = set()
+    for row in rows:
+        key = tuple(getattr(row, field) for field in keys)
+        if key in seen:
+            _invalid(f"Duplicate {label}")
+        seen.add(key)
 
-    In particular an explicitly null destination amount remains unresolved.
-    Defaults come from the backup itself, never the database being replaced.
-    """
+
+def _validate_backup(payload: BackupPayload) -> None:
+    """Pure checks: all representable constraints precede locks/deletion."""
+    if payload.aurum_backup_version != 2:
+        _invalid("Backup must be normalized to version 2")
+    _validate_references(payload)
+    for model in MODELS:
+        rows = getattr(payload, model.__tablename__)
+        _unique(rows, tuple(c.name for c in model.__table__.primary_key), model.__tablename__ + " primary key")
+        for row in rows:
+            for column in model.__table__.columns:
+                if column.name in ("created_at", "updated_at"):
+                    continue  # Existing backup contract excludes volatile ORM timestamps.
+                value = getattr(row, column.name)
+                if value is None and not column.nullable:
+                    _invalid(f"{model.__tablename__}.{column.name} cannot be NULL")
+                if isinstance(column.type, Integer) and value is not None and not -2147483648 <= value <= 2147483647:
+                    _invalid(f"{model.__tablename__}.{column.name} exceeds integer range")
+                if column.primary_key and (type(value) is not int or not 0 < value < 2147483647):
+                    _invalid("IDs must be positive PostgreSQL integers with sequence headroom")
+                if isinstance(column.type, String) and not isinstance(column.type, Enum) and value is not None:
+                    if column.name == "color" and re.fullmatch(r"#[0-9a-fA-F]{6}", value) is None:
+                        _invalid("Invalid color")
+                    if ((column.name == "name" and model is not CryptoHolding)
+                            or column.name == "description") and not value:
+                        _invalid(f"{model.__tablename__}.{column.name} cannot be empty")
+                    if column.type.length and len(value) > column.type.length:
+                        _invalid(f"{model.__tablename__}.{column.name} exceeds stored length")
+    _unique(payload.tags, ("name",), "tag name")
+    _unique(payload.budgets, ("category_id",), "budget category")
+    _unique(payload.asset_valuations, ("asset_id", "as_of_date"), "valuation day")
+    _unique(payload.fx_rates, ("base_currency", "quote_currency", "as_of_date"), "FX pair/day")
+    categories = {row.id: row for row in payload.categories}
+    for row in payload.categories:
+        if row.parent_id is not None:
+            parent = categories[row.parent_id]
+            if parent.parent_id is not None or parent.id == row.id or parent.kind != row.kind:
+                _invalid("Invalid category hierarchy")
     accounts = {row.id: row for row in payload.accounts}
-    currency = normalize_currency(payload.app_settings.currency)
-    transactions = []
-    for row in payload.transactions:
-        values = row.model_dump(exclude={"tag_ids"})
-        if "transfer_amount" not in row.model_fields_set and row.type == TransactionType.TRANSFER:
-            destination = accounts.get(row.transfer_account_id)
-            if destination is not None and accounts[row.account_id].currency == destination.currency:
-                values["transfer_amount"] = row.amount
-        transactions.append(values)
-    budgets = [{**row.model_dump(), "currency": row.currency or currency} for row in payload.budgets]
-    goals = [{**row.model_dump(), "currency": row.currency or currency} for row in payload.goals]
-    recurring = []
-    for row in payload.recurring_transactions:
-        values = row.model_dump()
-        values["amount_currency"] = row.amount_currency or accounts[row.account_id].currency
+    for row in [*payload.transactions, *payload.recurring_transactions]:
+        if row.amount <= 0 or (row.transfer_amount is not None and row.transfer_amount <= 0):
+            _invalid("Transaction amounts must be positive")
         if row.type == TransactionType.TRANSFER:
-            destination = accounts.get(row.transfer_account_id)
-            if destination is not None:
-                if "transfer_amount_currency" not in row.model_fields_set:
-                    values["transfer_amount_currency"] = destination.currency
-                if "transfer_amount" not in row.model_fields_set and values["amount_currency"] == destination.currency:
-                    values["transfer_amount"] = row.amount
-        recurring.append(values)
-    return transactions, budgets, goals, recurring
+            if row.category_id is not None or row.account_id == row.transfer_account_id:
+                _invalid("Invalid transfer category/destination")
+            # NULL destination/amount is a legitimate readable legacy state.
+            # Recurring snapshots may intentionally differ from current Accounts.
+            if isinstance(row, TransactionBackup) and row.transfer_account_id is not None:
+                if (accounts[row.account_id].currency == accounts[row.transfer_account_id].currency
+                        and row.transfer_amount is not None and row.transfer_amount != row.amount):
+                    _invalid("Same-currency transfer amounts must agree")
+        elif row.transfer_account_id is not None or row.transfer_amount is not None:
+            _invalid("Non-transfer cannot have destination fields")
+        if isinstance(row, RecurringTransactionBackup):
+            if row.type != TransactionType.TRANSFER and row.transfer_amount_currency is not None:
+                _invalid("Non-transfer cannot have destination currency")
+            if (row.transfer_amount is not None and row.amount_currency == row.transfer_amount_currency
+                    and row.amount != row.transfer_amount):
+                _invalid("Same-currency recurring amounts must agree")
+    splits = {}
+    for row in payload.transaction_splits:
+        if row.amount <= 0:
+            _invalid("Split amount must be positive")
+        splits.setdefault(row.transaction_id, []).append(row)
+    for row in payload.transactions:
+        parts = splits.get(row.id, [])
+        violation = split_rule_violation(type=row.type, amount=row.amount, category_id=row.category_id,
+                                         split_count=len(parts), split_total=sum_money(p.amount for p in parts))
+        if violation:
+            _invalid(violation)
+        if len(row.tag_ids) != len(set(row.tag_ids)):
+            _invalid("Duplicate transaction tag")
+    for row in payload.budgets:
+        if row.monthly_limit <= 0 or categories[row.category_id].kind.value != "expense":
+            _invalid("Budget needs positive limit and expense category")
+    if any(row.target_amount <= 0 for row in payload.goals):
+        _invalid("Goal target must be positive")
+    if any(row.amount == 0 for row in payload.goal_contributions):
+        _invalid("Goal contribution cannot be zero")
+    for row in payload.asset_valuations:
+        if row.value < 0 or (row.currency_confirmed and row.currency is None):
+            _invalid("Invalid valuation value/provenance")
+    for row in payload.crypto_transactions:
+        if row.quantity <= 0 or row.price_per_unit <= 0:
+            _invalid("Crypto quantity and price must be positive")
+    for row in payload.crypto_holdings:
+        provenance = (row.last_price_currency, row.last_price_as_of_date)
+        if (row.last_price is not None and row.last_price < 0
+                or (any(v is not None for v in provenance) and
+                    (row.last_price is None or any(v is None for v in provenance)))):
+            _invalid("Invalid crypto price cache tuple")
+
+
+async def _reset_sequence(session: AsyncSession, model) -> None:
+    if session.get_bind().dialect.name != "postgresql" or "id" not in model.__table__.primary_key:
+        return
+    table = model.__tablename__
+    sequence = await session.scalar(text("SELECT pg_get_serial_sequence(:table, 'id')"), {"table": table})
+    if sequence:
+        next_id = await session.scalar(text(f"SELECT COALESCE(MAX(id), 0) + 1 FROM {table}"))
+        # Unlike setval, RESTART is transactional and rolls back on restore failure.
+        quote = session.get_bind().dialect.identifier_preparer.quote
+        identifier = ".".join(quote(part) for part in sequence.split("."))
+        await session.execute(text(f"ALTER SEQUENCE {identifier} RESTART WITH {int(next_id)}"))
 
 
 async def restore_backup(session: AsyncSession, payload: BackupPayload) -> None:
-    if payload.aurum_backup_version != BACKUP_FORMAT_VERSION:
-        raise HTTPException(
-            400,
-            f"Unsupported backup version {payload.aurum_backup_version} "
-            f"(this Aurum version supports {BACKUP_FORMAT_VERSION})",
-        )
-
-    _validate_references(payload)
-    native_transactions, native_budgets, native_goals, native_recurring = _native_values(payload)
-
+    _validate_backup(payload)
     try:
-        # Children before parents.
-        await session.execute(delete(AssetValuation))
-        await session.execute(delete(CryptoTransaction))
-        await session.execute(delete(CryptoHolding))
-        await session.execute(delete(CryptoPortfolio))
-        await session.execute(delete(Budget))
-        await session.execute(delete(GoalContribution))
-        await session.execute(delete(Goal))
-        await session.execute(delete(RecurringTransaction))
-        # Deleting transactions cascades transaction_tags and
-        # transaction_splits rows (ON DELETE CASCADE) — deleted explicitly
-        # here anyway to keep this block's ordering self-documenting.
-        await session.execute(delete(TransactionSplit))
-        await session.execute(delete(Transaction))
-        await session.execute(delete(Tag))
-        await session.execute(delete(Asset))
-        await session.execute(delete(Category))
-        await session.execute(delete(Account))
-
-        # Parents before children. Categories are additionally self-referential
-        # (parent_id points at another row in the same table) — sort
-        # top-level categories first so a subcategory's FK is never inserted
-        # ahead of the row it points to.
-        categories_in_order = sorted(payload.categories, key=lambda row: row.parent_id is not None)
-
-        session.add_all(Account(**row.model_dump()) for row in payload.accounts)
-        session.add_all(Category(**row.model_dump()) for row in categories_in_order)
-        session.add_all(Asset(**row.model_dump()) for row in payload.assets)
-
-        # Tags and transactions are kept in id-keyed dicts (rather than a
-        # plain add_all) — transaction.tags is a relationship, not a column
-        # in model_dump(), so it has to be wired up from live ORM objects
-        # once everything is flushed and has real identities.
-        tags_by_id = {row.id: Tag(**row.model_dump()) for row in payload.tags}
-        session.add_all(tags_by_id.values())
-        # tags=[] at construction keeps the collection "loaded" on the
-        # transient object — reassigning it after flush (below) would
-        # otherwise trigger an implicit lazy-load, which async SQLAlchemy
-        # can't do outside an explicit await (MissingGreenlet).
-        transactions_by_id = {
-            values["id"]: Transaction(**values, tags=[]) for values in native_transactions
-        }
-        session.add_all(transactions_by_id.values())
-        session.add_all(TransactionSplit(**row.model_dump()) for row in payload.transaction_splits)
-
-        # Transitional v1 restore: no provenance evidence; Backup v2 will preserve it.
-        session.add_all(AssetValuation(**row.model_dump(), currency=None, currency_confirmed=False)
-                        for row in payload.asset_valuations)
-
-        session.add_all(CryptoPortfolio(**row.model_dump()) for row in payload.crypto_portfolios)
-        # A pre-portfolios backup has no crypto_portfolios and every holding's
-        # portfolio_id is None — give those holdings a freshly created
-        # fallback portfolio instead of leaving the NOT NULL column unset.
-        # Wired up via the `portfolio` relationship (not a raw portfolio_id
-        # int) because the fallback row has no id yet — same "assign the
-        # relationship, not the id column, before flush" reasoning as
-        # transactions_by_id/tags_by_id above.
-        fallback_portfolio: CryptoPortfolio | None = None
-        if any(row.portfolio_id is None for row in payload.crypto_holdings):
-            fallback_portfolio = CryptoPortfolio(name="Main Portfolio", color="#2a78d6")
-            session.add(fallback_portfolio)
-
-        crypto_holdings = []
-        for row in payload.crypto_holdings:
-            holding = CryptoHolding(**row.model_dump(exclude={"portfolio_id"}))
-            if row.portfolio_id is not None:
-                holding.portfolio_id = row.portfolio_id
-            else:
-                holding.portfolio = fallback_portfolio
-            crypto_holdings.append(holding)
-        session.add_all(crypto_holdings)
-
-        session.add_all(CryptoTransaction(**row.model_dump()) for row in payload.crypto_transactions)
-        session.add_all(Budget(**values) for values in native_budgets)
-        session.add_all(Goal(**values) for values in native_goals)
-        session.add_all(GoalContribution(**row.model_dump()) for row in payload.goal_contributions)
-        session.add_all(RecurringTransaction(**values) for values in native_recurring)
-        await session.flush()
-
+        await _lock_dataset(session)
+        await session.execute(delete(transaction_tags))
+        for model in reversed(MODELS):
+            await session.execute(delete(model))
+        await session.execute(delete(CryptoSyncState))
+        await session.execute(delete(AppSettings))
+        for model in MODELS:
+            rows = getattr(payload, model.__tablename__)
+            if model is Category:
+                rows = sorted(rows, key=lambda row: row.parent_id is not None)
+            # Individual Core inserts preserve ordering, explicit NULLs and IDs.
+            # They do not invoke reconciliation, FX or writer-side snapshots.
+            for row in rows:
+                values = row.model_dump(exclude={"tag_ids"})
+                await session.execute(insert(model.__table__).values(**values))
         for row in payload.transactions:
-            if row.tag_ids:
-                transactions_by_id[row.id].tags = [tags_by_id[tag_id] for tag_id in row.tag_ids]
-        if any(row.tag_ids for row in payload.transactions):
-            await session.flush()
-
-        await _reset_sequence(session, "accounts", payload.accounts)
-        await _reset_sequence(session, "categories", payload.categories)
-        await _reset_sequence(session, "tags", payload.tags)
-        await _reset_sequence(session, "assets", payload.assets)
-        await _reset_sequence(session, "transactions", payload.transactions)
-        await _reset_sequence(session, "transaction_splits", payload.transaction_splits)
-        await _reset_sequence(session, "asset_valuations", payload.asset_valuations)
-        # Only needed for explicit-id portfolios from payload — a fallback
-        # portfolio (no payload row) already got its id from the sequence
-        # itself, so the sequence is already correctly positioned for it.
-        await _reset_sequence(session, "crypto_portfolios", payload.crypto_portfolios)
-        await _reset_sequence(session, "crypto_transactions", payload.crypto_transactions)
-        await _reset_sequence(session, "budgets", payload.budgets)
-        await _reset_sequence(session, "goals", payload.goals)
-        await _reset_sequence(session, "goal_contributions", payload.goal_contributions)
-        await _reset_sequence(session, "recurring_transactions", payload.recurring_transactions)
-
-        # Singleton row — updated in place, not deleted/recreated (no
-        # sequence to reset, id is always 1).
-        app_settings = await session.get(AppSettings, 1)
-        if app_settings is None:
-            session.add(AppSettings(id=1, **payload.app_settings.model_dump()))
-        else:
-            for field, value in payload.app_settings.model_dump().items():
-                setattr(app_settings, field, value)
-
+            for tag_id in row.tag_ids:
+                await session.execute(insert(transaction_tags).values(transaction_id=row.id, tag_id=tag_id))
+        await session.execute(insert(AppSettings.__table__).values(**payload.app_settings.model_dump()))
+        if payload.crypto_sync_state is not None:
+            await session.execute(insert(CryptoSyncState.__table__).values(**payload.crypto_sync_state.model_dump()))
+        for model in (*MODELS, AppSettings, CryptoSyncState):
+            await _reset_sequence(session, model)
         await session.commit()
-    except HTTPException:
-        await session.rollback()
-        raise
+        session.expire_all()
     except Exception as exc:
         await session.rollback()
-        # The exception text is SQLAlchemy's, naming tables, columns and
-        # constraints — a free map of the schema for anyone probing the API.
-        # It goes to the container log, where the operator can actually read
-        # it; the client gets told only that nothing changed.
         logger.exception("Backup restore failed")
         raise HTTPException(400, "Restore failed, no changes were made") from exc

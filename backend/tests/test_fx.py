@@ -253,13 +253,14 @@ async def test_reference_fx_isolated_from_execution_and_reads(client, account_id
     forbidden.assert_not_called()
 
 
-async def test_backup_v1_intentionally_defers_fx(test_sessionmaker):
+async def test_backup_v2_preserves_stored_fx(test_sessionmaker):
     await store(test_sessionmaker, obs())
     async with test_sessionmaker() as session:
         payload = (await build_backup(session)).model_dump()
-        assert payload["aurum_backup_version"] == 1
-        assert "fx_rates" not in payload
-        assert "fx_max_age_days" not in payload["app_settings"]
+        assert payload["aurum_backup_version"] == 2
+        assert len(payload["fx_rates"]) == 1
+        assert payload["fx_rates"][0]["rate"] == obs().rate
+        assert payload["app_settings"]["fx_max_age_days"] == 7
 
 
 async def test_fx_migration_roundtrip(test_sessionmaker):

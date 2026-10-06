@@ -900,6 +900,10 @@ curl -u user:pass -X POST http://localhost:3000/api/backup/import \
   -d @aurum-backup.json
 ```
 
+Export emits `aurum_backup_version: 2`; import accepts historical v1 and v2.
+See [the Backup v2 contract](backend/BACKUP_FORMAT.md) for the authoritative field matrix,
+legacy normalization, validation and atomicity guarantees.
+
 The payload includes an `aurum_backup_version` field checked on import — a file from an incompatible
 future format is rejected outright rather than partially applied. Treat `/backup/import` as
 destructive: back up your current data first if you're experimenting.

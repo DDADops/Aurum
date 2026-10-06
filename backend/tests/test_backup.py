@@ -51,6 +51,7 @@ async def test_backup_import_rejects_transaction_with_unknown_tag_id(client: Asy
             "transfer_account_id": t["transfer_account_id"],
             "type": t["type"],
             "amount": t["amount"],
+            "transfer_amount": t["transfer_amount"],
             "description": t["description"],
             "merchant": t["merchant"],
             "notes": t["notes"],

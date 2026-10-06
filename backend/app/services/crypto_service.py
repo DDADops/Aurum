@@ -407,7 +407,7 @@ async def refresh_prices(session: AsyncSession, *, force: bool, portfolio_id: in
 
 
 async def create_holding(session: AsyncSession, payload: CryptoHoldingCreate) -> CryptoHoldingRead:
-    quote = await effective_default_currency(session)
+    quote = payload.quote_currency or await effective_default_currency(session)
     state = await get_or_create_sync_state(session)
     # Seed HTTP precedes all Asset/Holding/Transaction inserts and row locks.
     try:

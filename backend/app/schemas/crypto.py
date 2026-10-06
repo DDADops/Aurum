@@ -63,6 +63,9 @@ class CryptoPortfolioRead(BaseModel):
 
 
 class CryptoHoldingCreate(BaseModel):
+    # Explicit denomination of the initial purchase. Omission/null preserves
+    # the legacy settings snapshot; new clients should always send this field.
+    quote_currency: CurrencyCode | None = None
     # Which portfolio to file this coin under — omit to use the default
     # portfolio (the earliest-created one, auto-created if none exists yet;
     # see services/crypto_service.py's get_or_create_default_portfolio).

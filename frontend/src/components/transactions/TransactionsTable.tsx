@@ -2,7 +2,8 @@ import { useState } from "react";
 import { ArrowLeftRight, CalendarSearch, Pencil, SquareDivide, StickyNote, Trash2 } from "lucide-react";
 import { Dialog } from "@/components/ui/Dialog";
 import { getCategoryIcon } from "@/lib/icons";
-import { formatCurrency, formatTransactionDate } from "@/lib/format";
+import { TransactionAmount } from "@/components/transactions/TransactionAmount";
+import { formatTransactionDate } from "@/lib/format";
 import { useTranslation } from "@/lib/i18n";
 import { categoryPath, translateCategoryName } from "@/lib/categoryLabels";
 import { useCategories } from "@/hooks/useCategories";
@@ -70,8 +71,7 @@ export function TransactionsTable({ items, onEdit, onDelete, onJumpToMonth }: Tr
                   isTransfer ? "text-text-muted" : isExpense ? "text-text-primary" : "text-success"
                 }`}
               >
-                {isTransfer ? "" : isExpense ? "-" : "+"}
-                {formatCurrency(tx.amount, tx.account.currency)}
+                <TransactionAmount transaction={tx} />
               </span>
 
               <span className="flex shrink-0 gap-1">

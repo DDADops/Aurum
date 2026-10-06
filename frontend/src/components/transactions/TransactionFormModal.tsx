@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { hasFinancialChanges, transactionPatch, transferDisplayRate, validTransferAmount } from "@/lib/transfer";
+import { ApiError } from "@/api/client";
 import { moneyToUnits, unitsToMoney, splitRemainder } from "@/lib/money";
 import { Plus, X } from "lucide-react";
 import { Dialog } from "@/components/ui/Dialog";
@@ -10,7 +12,7 @@ import { useCategories } from "@/hooks/useCategories";
 import { useCreateTransaction, useUpdateTransaction } from "@/hooks/useTransactions";
 import { useTranslation } from "@/lib/i18n";
 import { buildHierarchicalCategories, translateCategoryName } from "@/lib/categoryLabels";
-import type { Tag, Transaction, TransactionInput, TransactionSplitInput, TransactionType } from "@/types";
+import type { Account, Tag, Transaction, TransactionInput, TransactionSplitInput, TransactionType } from "@/types";
 
 interface TransactionFormModalProps {
   open: boolean;
@@ -27,6 +29,8 @@ const EMPTY_FORM = {
   account_id: "",
   category_id: "",
   transfer_account_id: "",
+  transfer_amount: "",
+  transfer_pair: "",
   amount: "",
   description: "",
   merchant: "",
@@ -63,6 +67,7 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
   const createTransaction = useCreateTransaction();
   const updateTransaction = useUpdateTransaction();
 
+  const initialized = useRef<string | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [tags, setTags] = useState<Tag[]>([]);
   const [splitMode, setSplitMode] = useState(false);
@@ -70,7 +75,11 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) { initialized.current = null; return; }
+    const key = transaction ? String(transaction.id) : "new";
+    if (initialized.current === key) return;
+    if (!transaction && !accounts) return;
+    initialized.current = key;
     if (transaction) {
       const hasSplits = transaction.splits.length > 0;
       // A split's categories always share one parent (see
@@ -90,6 +99,8 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
             ? String(transaction.category_id)
             : "",
         transfer_account_id: transaction.transfer_account_id ? String(transaction.transfer_account_id) : "",
+        transfer_amount: transaction.transfer_amount ?? "",
+        transfer_pair: `${transaction.account_id}:${transaction.account.currency}:${transaction.transfer_account_id}:${transaction.transfer_account?.currency ?? ""}`,
         amount: transaction.amount,
         description: transaction.description,
         merchant: transaction.merchant ?? "",
@@ -116,6 +127,41 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
     }
     setError(null);
   }, [open, transaction, accounts]);
+
+  // Existing archived accounts remain selectable when editing their transaction;
+  // new choices still come from the active Accounts query.
+  const accountOptions: Account[] = [...(accounts ?? [])];
+  for (const embedded of [transaction?.account, transaction?.transfer_account]) {
+    if (embedded && !accountOptions.some((item) => item.id === embedded.id)) {
+      accountOptions.push(embedded);
+    }
+  }
+  const sourceCurrency = accountOptions.find((item) => String(item.id) === form.account_id)?.currency;
+  const destinationCurrency = accountOptions.find((item) => String(item.id) === form.transfer_account_id)?.currency;
+  const isTransfer = form.type === "transfer";
+  const sameCurrency = !!sourceCurrency && sourceCurrency === destinationCurrency;
+  const pairKey = `${form.account_id}:${sourceCurrency ?? ""}:${form.transfer_account_id}:${destinationCurrency ?? ""}`;
+  useEffect(() => {
+    if (form.transfer_pair && form.transfer_pair !== pairKey) {
+      setForm((prev) => ({ ...prev, transfer_amount: "", transfer_pair: "" }));
+    }
+  }, [form.transfer_pair, pairKey]);
+  const destinationAmount = sameCurrency ? form.amount : form.transfer_pair === pairKey ? form.transfer_amount : "";
+  const unchangedMoney = transaction?.type === "transfer"
+    && form.account_id === String(transaction.account_id)
+    && form.transfer_account_id === String(transaction.transfer_account_id)
+    && sourceCurrency === transaction.account.currency && destinationCurrency === transaction.transfer_account?.currency
+    && form.amount === transaction.amount && destinationAmount === transaction.transfer_amount;
+  const rate = isTransfer && !sameCurrency
+    ? unchangedMoney && transaction.effective_rate !== null ? transaction.effective_rate
+      : transferDisplayRate(form.amount, destinationAmount)
+    : null;
+
+  function changeAccount(field: "account_id" | "transfer_account_id", value: string) {
+    setForm((prev) => ({ ...prev, [field]: value, transfer_amount: "", transfer_pair: "",
+      ...(field === "account_id" && value === prev.transfer_account_id ? { transfer_account_id: "" } : {}),
+    }));
+  }
 
   const kindCategories = (categories ?? []).filter((category) =>
     form.type === "income" ? category.kind === "income" : category.kind === "expense"
@@ -174,11 +220,15 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
     event.preventDefault();
     setError(null);
 
+    if (!validTransferAmount(form.amount)) {
+      setError(t("transactions.form.invalidAmount"));
+      return;
+    }
     if (!form.account_id) {
       setError(t("transactions.form.errorSelectAccount"));
       return;
     }
-    if (form.type === "transfer" && !form.transfer_account_id) {
+    if (form.type === "transfer" && !form.transfer_account_id && !transaction) {
       setError(t("transactions.form.errorSelectDestination"));
       return;
     }
@@ -228,8 +278,9 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
           : form.category_id
             ? Number(form.category_id)
             : null,
-      transfer_account_id: form.type === "transfer" ? Number(form.transfer_account_id) : null,
+      transfer_account_id: form.type === "transfer" && form.transfer_account_id ? Number(form.transfer_account_id) : null,
       amount: form.amount,
+      ...(isTransfer ? { transfer_amount: destinationAmount || null } : {}),
       description: form.description,
       merchant: form.merchant || null,
       notes: form.notes || null,
@@ -238,15 +289,39 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
       splits,
     };
 
+    const patch = transaction ? transactionPatch(payload, transaction) : null;
+    // An unresolved metadata edit must not accidentally reconcile a same-currency
+    // legacy row either. Financial edits still submit the exact synchronized side.
+    if (patch && transaction?.type === "transfer" && transaction.transfer_amount === null && sameCurrency) {
+      delete patch.transfer_amount;
+      if (hasFinancialChanges(patch)) patch.transfer_amount = form.amount;
+    }
+    const financial = !patch || hasFinancialChanges(patch);
+    if (isTransfer && financial) {
+      if (!form.transfer_account_id || !sourceCurrency || !destinationCurrency) {
+        setError(t("transactions.form.errorSelectDestination"));
+        return;
+      }
+      if (!validTransferAmount(destinationAmount)) {
+        setError(t(destinationAmount ? "transactions.form.invalidAmount" : "transactions.form.reconciliationRequired"));
+        return;
+      }
+      // A changed pair always needs an explicitly accepted credit, even if its
+      // numeric value happens to match the previously stored credit.
+      if (patch && (patch.account_id !== undefined || patch.transfer_account_id !== undefined || patch.type === "transfer"
+        || (sameCurrency && patch.amount !== undefined))) patch.transfer_amount = destinationAmount;
+    }
+
     try {
-      if (transaction) {
-        await updateTransaction.mutateAsync({ id: transaction.id, input: payload });
+      if (transaction && patch) {
+        if (Object.keys(patch).length > 0) await updateTransaction.mutateAsync({ id: transaction.id, input: patch });
       } else {
         await createTransaction.mutateAsync(payload);
       }
       onClose();
-    } catch {
-      setError(t("transactions.form.saveError"));
+    } catch (error) {
+      setError(t(error instanceof ApiError && [400, 409, 422].includes(error.status)
+        ? "transactions.form.rejected" : "transactions.form.saveError"));
     }
   }
 
@@ -264,7 +339,7 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
             value={form.type}
             onChange={(event) => {
               const nextType = event.target.value as TransactionType;
-              setForm((prev) => ({ ...prev, type: nextType, category_id: "" }));
+              setForm((prev) => ({ ...prev, type: nextType, category_id: "", transfer_account_id: "", transfer_amount: "", transfer_pair: "" }));
               if (nextType === "transfer") setSplitMode(false);
             }}
           >
@@ -276,12 +351,11 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <Label htmlFor="amount">{t("transactions.form.amountLabel")}</Label>
+            <Label htmlFor="amount">{t(isTransfer ? "transactions.form.amountSent" : "transactions.form.amountLabel")} {sourceCurrency && `(${sourceCurrency})`}</Label>
             <Input
               id="amount"
-              type="number"
-              step="0.000001"
-              min="0.000001"
+              type="text"
+              inputMode="decimal"
               required
               value={form.amount}
               onChange={(event) => setForm((prev) => ({ ...prev, amount: event.target.value }))}
@@ -299,6 +373,19 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
           </div>
         </div>
 
+        {isTransfer && !sameCurrency && (
+          <div>
+            <Label htmlFor="transfer-amount">{t("transactions.form.amountReceived")} {destinationCurrency && `(${destinationCurrency})`}</Label>
+            <Input id="transfer-amount" type="text" inputMode="decimal" value={destinationAmount}
+              aria-describedby={!destinationAmount ? "transfer-reconciliation" : undefined}
+              onChange={(event) => setForm((prev) => ({ ...prev, transfer_amount: event.target.value, transfer_pair: pairKey }))} />
+            {!destinationAmount && <p id="transfer-reconciliation" role="status" className="mt-1 text-xs text-text-muted">{t("transactions.needsReconciliation")}</p>}
+          </div>
+        )}
+        {rate && <p className="text-xs text-text-muted" aria-live="polite">
+          {t("transactions.form.transactionRate")}: 1 {sourceCurrency} ≈ {rate} {destinationCurrency}
+        </p>}
+
         <div>
           <Label htmlFor="description">{t("transactions.form.descriptionLabel")}</Label>
           <Input
@@ -311,19 +398,19 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
         </div>
 
         <div>
-          <Label htmlFor="account">{t("transactions.form.accountLabel")}</Label>
+          <Label htmlFor="account">{t(isTransfer ? "transactions.form.sourceAccount" : "transactions.form.accountLabel")}</Label>
           <Select
             id="account"
             required
             value={form.account_id}
-            onChange={(event) => setForm((prev) => ({ ...prev, account_id: event.target.value }))}
+            onChange={(event) => changeAccount("account_id", event.target.value)}
           >
             <option value="" disabled>
               {t("transactions.form.selectAccount")}
             </option>
-            {accounts?.map((account) => (
+            {accountOptions.map((account) => (
               <option key={account.id} value={account.id}>
-                {account.name}
+                {account.name} · {account.currency}
               </option>
             ))}
           </Select>
@@ -331,21 +418,21 @@ export function TransactionFormModal({ open, onClose, transaction }: Transaction
 
         {form.type === "transfer" ? (
           <div>
-            <Label htmlFor="transfer_account">{t("transactions.form.transferAccountLabel")}</Label>
+            <Label htmlFor="transfer_account">{t("transactions.form.destinationAccount")}</Label>
             <Select
               id="transfer_account"
               required
               value={form.transfer_account_id}
-              onChange={(event) => setForm((prev) => ({ ...prev, transfer_account_id: event.target.value }))}
+              onChange={(event) => changeAccount("transfer_account_id", event.target.value)}
             >
               <option value="" disabled>
                 {t("transactions.form.selectAccount")}
               </option>
-              {accounts
-                ?.filter((account) => String(account.id) !== form.account_id)
+              {accountOptions
+                .filter((account) => String(account.id) !== form.account_id)
                 .map((account) => (
                   <option key={account.id} value={account.id}>
-                    {account.name}
+                    {account.name} · {account.currency}
                   </option>
                 ))}
             </Select>

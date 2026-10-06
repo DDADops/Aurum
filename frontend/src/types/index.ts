@@ -123,7 +123,10 @@ export interface TransactionSplitInput {
   note?: string | null;
 }
 
-export interface Transaction {
+export interface Transaction extends FinancialDataStatus {
+  transfer_amount: string | null;
+  effective_rate: string | null;
+  transfer_account: Account | null;
   id: number;
   account_id: number;
   category_id: number | null;
@@ -148,6 +151,7 @@ export interface TransactionPage {
 }
 
 export interface TransactionInput {
+  transfer_amount?: string | null;
   account_id: number;
   category_id: number | null;
   transfer_account_id: number | null;

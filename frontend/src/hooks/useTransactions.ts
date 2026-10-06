@@ -9,6 +9,7 @@ import {
   updateTransaction,
   type TransactionFilters,
 } from "@/api/transactions";
+import { ApiError } from "@/api/client";
 import type { TransactionInput } from "@/types";
 
 function useInvalidateAfterTransactionChange() {
@@ -62,35 +63,53 @@ export function useTransactionYears() {
   });
 }
 
+function useRefetchAfterRejectedTransaction() {
+  const client = useQueryClient();
+  return (error: Error) => {
+    if (error instanceof ApiError && [400, 409, 422].includes(error.status)) {
+      client.invalidateQueries({ queryKey: ["accounts"] });
+      client.invalidateQueries({ queryKey: ["transactions"] });
+    }
+  };
+}
+
 export function useCreateTransaction() {
   const invalidate = useInvalidateAfterTransactionChange();
+  const onError = useRefetchAfterRejectedTransaction();
   return useMutation({
     mutationFn: (input: TransactionInput) => createTransaction(input),
     onSuccess: invalidate,
+    onError,
   });
 }
 
 export function useUpdateTransaction() {
   const invalidate = useInvalidateAfterTransactionChange();
+  const onError = useRefetchAfterRejectedTransaction();
   return useMutation({
     mutationFn: ({ id, input }: { id: number; input: Partial<TransactionInput> }) =>
       updateTransaction(id, input),
     onSuccess: invalidate,
+    onError,
   });
 }
 
 export function useBulkCreateTransactions() {
   const invalidate = useInvalidateAfterTransactionChange();
+  const onError = useRefetchAfterRejectedTransaction();
   return useMutation({
     mutationFn: (items: TransactionInput[]) => bulkCreateTransactions(items),
     onSuccess: invalidate,
+    onError,
   });
 }
 
 export function useDeleteTransaction() {
   const invalidate = useInvalidateAfterTransactionChange();
+  const onError = useRefetchAfterRejectedTransaction();
   return useMutation({
     mutationFn: (id: number) => deleteTransaction(id),
     onSuccess: invalidate,
+    onError,
   });
 }

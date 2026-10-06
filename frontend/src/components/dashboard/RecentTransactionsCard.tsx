@@ -1,7 +1,8 @@
 import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { getCategoryIcon } from "@/lib/icons";
-import { formatCurrency, formatTransactionDate } from "@/lib/format";
+import { TransactionAmount } from "@/components/transactions/TransactionAmount";
+import { formatTransactionDate } from "@/lib/format";
 import { useTranslation } from "@/lib/i18n";
 import { categoryPath, translateCategoryName } from "@/lib/categoryLabels";
 import { useTransactions } from "@/hooks/useTransactions";
@@ -66,8 +67,7 @@ export function RecentTransactionsCard({ year, month }: RecentTransactionsCardPr
                       isTransfer ? "text-text-muted" : isExpense ? "text-text-primary" : "text-success"
                     }`}
                   >
-                    {isTransfer ? "" : isExpense ? "-" : "+"}
-                    {formatCurrency(tx.amount, tx.account.currency)}
+                    <TransactionAmount transaction={tx} />
                   </span>
                 </li>
               );

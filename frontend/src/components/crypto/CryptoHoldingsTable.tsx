@@ -1,3 +1,5 @@
+import { analyticsValue, metricStatus } from "@/lib/analytics";
+import { compareDecimals } from "@/lib/planningMoney";
 import { Bitcoin, Plus, Trash2 } from "lucide-react";
 import { NetworkPicker } from "@/components/crypto/NetworkPicker";
 import { RiskLevelPicker } from "@/components/crypto/RiskLevelPicker";
@@ -75,12 +77,12 @@ export function CryptoHoldingsTable({
             const profitColor =
               holding.profit_loss === null
                 ? undefined
-                : Number(holding.profit_loss) > 0
+                : compareDecimals(holding.profit_loss, "0") > 0
                   ? "var(--success)"
-                  : Number(holding.profit_loss) < 0
+                  : compareDecimals(holding.profit_loss, "0") < 0
                     ? "var(--danger)"
                     : "var(--text-muted)";
-            const sign = holding.profit_loss !== null && Number(holding.profit_loss) > 0 ? "+" : "";
+            const sign = holding.profit_loss !== null && analyticsValue(holding.profit_loss, metricStatus(holding, "profit_loss"), holding.currency) !== null && compareDecimals(holding.profit_loss, "0") > 0 ? "+" : "";
 
             return (
               <tr
@@ -122,9 +124,9 @@ export function CryptoHoldingsTable({
                   </div>
                 </td>
                 <td className="py-3.5 pr-4 text-right align-middle tabular-nums text-text-primary">
-                  {holding.current_price !== null
+                  {holding.current_price !== null && holding.last_price_currency !== null && holding.last_price_as_of_date !== null
                     ? maskAmount(formatCryptoAmount(holding.current_price, holding.last_price_currency), hidden)
-                    : t("crypto.pendingPrice")}
+                    : t("planning.priceUnknown")}
                 </td>
                 <td className="py-3.5 pr-4 text-right align-middle">
                   <PercentCell value={holding.price_change_1h} />
@@ -137,17 +139,17 @@ export function CryptoHoldingsTable({
                 </td>
                 <td className="py-3.5 pr-4 text-right align-middle">
                   <span className="block tabular-nums text-text-primary">
-                    {holding.value !== null ? maskAmount(formatCryptoAmount(holding.value, holding.currency), hidden) : t("crypto.pendingPrice")}
+                    {holding.value !== null && analyticsValue(holding.value, metricStatus(holding, "value"), holding.currency) !== null ? maskAmount(formatCryptoAmount(holding.value, holding.currency), hidden) : t("financial.unknown")}
                   </span>
                   <span className="mt-0.5 block text-xs tabular-nums text-text-muted">
-                    {maskAmount(`${Number(holding.quantity)} ${holding.symbol}`, hidden)}
+                    {maskAmount(`${holding.quantity} ${holding.symbol}`, hidden)}
                   </span>
                 </td>
                 <td className="py-3.5 pr-4 text-right align-middle tabular-nums text-text-primary">
-                  {holding.avg_buy_price !== null ? maskAmount(formatCryptoAmount(holding.avg_buy_price, holding.currency), hidden) : "—"}
+                  {holding.avg_buy_price !== null && analyticsValue(holding.avg_buy_price, metricStatus(holding, "avg_buy_price"), holding.currency) !== null ? maskAmount(formatCryptoAmount(holding.avg_buy_price, holding.currency), hidden) : "—"}
                 </td>
                 <td className="py-3.5 pr-4 text-right align-middle">
-                  {holding.profit_loss !== null && holding.profit_loss_percent !== null ? (
+                  {holding.profit_loss !== null && analyticsValue(holding.profit_loss, metricStatus(holding, "profit_loss"), holding.currency) !== null && holding.profit_loss_percent !== null ? (
                     <>
                       <span className="block tabular-nums" style={{ color: profitColor }}>
                         {maskAmount(`${sign}${formatCryptoAmount(holding.profit_loss, holding.currency)}`, hidden)}

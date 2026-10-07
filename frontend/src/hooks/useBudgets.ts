@@ -24,14 +24,16 @@ export function useCreateBudget() {
   return useMutation({
     mutationFn: (input: BudgetInput) => createBudget(input),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 }
 
 export function useUpdateBudget() {
   const invalidate = useInvalidateBudgets();
   return useMutation({
-    mutationFn: ({ id, monthlyLimit }: { id: number; monthlyLimit: string }) => updateBudget(id, monthlyLimit),
+    mutationFn: ({ id, monthlyLimit, currency }: { id: number; monthlyLimit: string; currency: string }) => updateBudget(id, monthlyLimit, currency),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 }
 
@@ -40,5 +42,6 @@ export function useDeleteBudget() {
   return useMutation({
     mutationFn: (id: number) => deleteBudget(id),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 }

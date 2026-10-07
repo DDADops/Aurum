@@ -13,8 +13,8 @@ describe("buildSlices (network allocation)", () => {
     ];
     const slices = buildSlices(holdings, UNSET);
     const byLabel = Object.fromEntries(slices.map((s) => [s.label, s.amount]));
-    expect(byLabel["Ethereum"]).toBe(150);
-    expect(byLabel["Tron"]).toBe(30);
+    expect(byLabel["Ethereum"]).toBe("150");
+    expect(byLabel["Tron"]).toBe("30");
   });
 
   it("folds holdings with no network into one unset bucket instead of dropping them", () => {
@@ -22,7 +22,7 @@ describe("buildSlices (network allocation)", () => {
     const slices = buildSlices(holdings, UNSET);
     expect(slices).toHaveLength(1);
     expect(slices[0].label).toBe(UNSET);
-    expect(slices[0].amount).toBe(50);
+    expect(slices[0].amount).toBe("50");
   });
 
   it("excludes unpriced holdings entirely", () => {
@@ -54,6 +54,6 @@ describe("buildSlices (network allocation)", () => {
     const other = slices.find((s) => s.key === "__other__")!;
     expect(other).toBeDefined();
     // The two smallest: Net7 (value 2) and Net8 (value 1).
-    expect(other.amount).toBe(3);
+    expect(other.amount).toBe("3");
   });
 });

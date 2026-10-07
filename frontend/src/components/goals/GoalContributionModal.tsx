@@ -1,3 +1,4 @@
+import { moneyToUnits } from "@/lib/money";
 import { useEffect, useState } from "react";
 import { Dialog } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
@@ -36,6 +37,8 @@ export function GoalContributionModal({ open, onClose, goal }: GoalContributionM
     if (!goal) return;
     setError(null);
 
+    const units = moneyToUnits(amount);
+    if (units === null || units === 0n) { setError(t("goal.contribution.saveError")); return; }
     try {
       await addContribution.mutateAsync({ id: goal.id, input: { amount, date } });
       onClose();
@@ -53,10 +56,10 @@ export function GoalContributionModal({ open, onClose, goal }: GoalContributionM
       <form onSubmit={handleSubmit} className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <Label htmlFor="contribution-amount">{t("goal.contribution.amountLabel")}</Label>
+            <Label htmlFor="contribution-amount">{t("goal.contribution.amountLabel")} ({goal?.currency})</Label>
             <Input
               id="contribution-amount"
-              type="number"
+              type="text" inputMode="decimal"
               step="0.000001"
               required
               placeholder={t("goal.contribution.amountPlaceholder")}

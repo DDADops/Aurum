@@ -412,6 +412,7 @@ export interface Goal {
 }
 
 export interface GoalInput {
+  currency: string;
   name: string;
   target_amount: string;
   target_date: string | null;
@@ -434,11 +435,12 @@ export interface Budget {
 }
 
 export interface BudgetInput {
+  currency: string;
   category_id: number;
   monthly_limit: string;
 }
 
-export interface BudgetStatus {
+export interface BudgetStatus extends FinancialResponseStatus {
   currency: string;
   budget_id: number;
   category_id: number;
@@ -446,13 +448,13 @@ export interface BudgetStatus {
   category_color: string;
   category_icon: string | null;
   monthly_limit: string;
-  spent: string;
-  remaining: string;
-  percent: number;
-  is_over_budget: boolean;
+  spent: string | null;
+  remaining: string | null;
+  percent: number | null;
+  is_over_budget: boolean | null;
 }
 
-export interface BudgetStatusResponse {
+export interface BudgetStatusResponse extends FinancialDataStatus {
   year: number;
   month: number;
   items: BudgetStatus[];
@@ -488,9 +490,11 @@ export interface CryptoPortfolioInput {
   is_archived?: boolean;
 }
 
-export interface CryptoHolding {
+export interface CryptoHolding extends FinancialResponseStatus {
   currency: string;
   last_price_currency: string | null;
+  last_price_as_of_date: string | null;
+  cost_basis_currency: string | null;
   asset_id: number;
   portfolio_id: number;
   coingecko_id: string;
@@ -527,6 +531,7 @@ export interface CryptoHolding {
 }
 
 export interface CryptoHoldingCreateInput {
+  quote_currency: string;
   // Omit to file the coin under the default portfolio (auto-created if
   // none exists yet — see services/crypto_service.py's
   // get_or_create_default_portfolio).
@@ -563,6 +568,7 @@ export interface CryptoTransaction {
 }
 
 export interface CryptoTransactionInput {
+  quote_currency: string;
   type: CryptoTransactionType;
   quantity: string;
   price_per_unit: string;
@@ -570,7 +576,7 @@ export interface CryptoTransactionInput {
   note?: string | null;
 }
 
-export interface CryptoSyncResult {
+export interface CryptoSyncResult extends FinancialResponseStatus {
   currency: string;
   synced: boolean;
   last_synced_at: string | null;
@@ -602,16 +608,16 @@ export interface CryptoPerformanceResponse {
 // be one or two points, not a smooth intraday line.
 export type CryptoRange = "7d" | "30d" | "90d" | "all";
 
-export interface CryptoHistoryPoint {
+export interface CryptoHistoryPoint extends FinancialDataStatus {
   date: string;
-  value: string;
+  value: string | null;
 }
 
-export interface CryptoHistoryResponse {
+export interface CryptoHistoryResponse extends FinancialResponseStatus {
   currency: string;
   range: CryptoRange;
-  current: string;
-  change_amount: string;
+  current: string | null;
+  change_amount: string | null;
   change_percent: number | null;
   series: CryptoHistoryPoint[];
 }

@@ -1,3 +1,4 @@
+import { assetRoi, compareDecimals } from "@/lib/planningMoney";
 import { Pencil, Trash2 } from "lucide-react";
 import { getCategoryIcon } from "@/lib/icons";
 import { formatCurrency, formatTransactionDate } from "@/lib/format";
@@ -37,11 +38,8 @@ export function AssetsTable({ items, onEdit, onDelete }: AssetsTableProps) {
       {items.map((asset) => {
         const Icon = getCategoryIcon(CLASS_ICONS[asset.asset_class]);
         const roleColor = ROLE_COLORS[asset.capital_role];
-        const cashFlow = asset.monthly_cash_flow !== null ? Number(asset.monthly_cash_flow) : null;
-        const currentValue = Number(asset.current_value);
-        // Annual ROI only makes sense for money coming in against what was
-        // paid for the asset — same formula as RoiCalculatorCard.
-        const annualRoiPercent = cashFlow !== null && cashFlow > 0 && currentValue > 0 ? (cashFlow * 12) / currentValue * 100 : null;
+        const cashFlow = asset.monthly_cash_flow;
+        const annualRoiPercent = assetRoi(asset);
 
         return (
           <li key={asset.id} className="flex items-center gap-3 py-3">
@@ -63,15 +61,15 @@ export function AssetsTable({ items, onEdit, onDelete }: AssetsTableProps) {
               <span className="block text-sm font-medium tabular-nums text-text-primary">
                 {formatCurrency(asset.current_value, asset.valuation_currency_confirmed ? asset.valuation_currency : null)}
               </span>
-              {cashFlow !== null && cashFlow !== 0 && (
+              {cashFlow !== null && compareDecimals(cashFlow, "0") !== 0 && (
                 <span
                   className="block text-xs tabular-nums"
-                  style={{ color: cashFlow > 0 ? "var(--success)" : "var(--danger)" }}
+                  style={{ color: compareDecimals(cashFlow, "0") > 0 ? "var(--success)" : "var(--danger)" }}
                 >
-                  {cashFlow > 0 ? "+" : ""}
+                  {compareDecimals(cashFlow, "0") > 0 ? "+" : ""}
                   {formatCurrency(cashFlow, asset.currency)}
                   {t("common.perMonth")}
-                  {annualRoiPercent !== null && ` · ${t("netWorth.assetsTable.annualRoi", { percent: annualRoiPercent.toFixed(1) })}`}
+                  {` · ${t("netWorth.assetsTable.annualRoi", { percent: annualRoiPercent === null ? t("financial.unknown") : annualRoiPercent.toFixed(1) })}`}
                 </span>
               )}
             </span>

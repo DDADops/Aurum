@@ -1,3 +1,6 @@
+import { PlanningCurrencySelect } from "@/components/ui/PlanningCurrencySelect";
+import { useAppSettings } from "@/hooks/useSettings";
+import { validPositiveDecimal } from "@/lib/planningMoney";
 import { type FormEvent, useEffect, useState } from "react";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/Button";
@@ -34,10 +37,13 @@ export function CryptoTransactionModal({ open, onClose, holding, transaction = n
   const [pricePerUnit, setPricePerUnit] = useState("");
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState("");
+  const { data: settings } = useAppSettings();
+  const [currency, setCurrency] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    setCurrency(transaction ? transaction.quote_currency ?? "" : settings?.currency ?? "");
     if (transaction) {
       setType(transaction.type);
       // The API returns these at full Numeric(38,18) scale (e.g.
@@ -57,21 +63,29 @@ export function CryptoTransactionModal({ open, onClose, holding, transaction = n
     setError(null);
   }, [open, holding, transaction]);
 
+  useEffect(() => { if (open && !transaction && !currency && settings?.currency) setCurrency(settings.currency); }, [open, transaction, currency, settings?.currency]);
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (!holding) return;
     setError(null);
-    const input = { type, quantity, price_per_unit: pricePerUnit, date, note: note || null };
+    const financialChanged = !transaction || type !== transaction.type || quantity !== trimTrailingZeros(transaction.quantity) || pricePerUnit !== trimTrailingZeros(transaction.price_per_unit) || date !== transaction.date || currency !== (transaction.quote_currency ?? "");
+    if (financialChanged && (!currency || !validPositiveDecimal(quantity, 38, 18) || !validPositiveDecimal(pricePerUnit, 38, 18))) {
+      setError(t(!currency ? "planning.unknownQuote" : "planning.invalidCrypto")); return;
+    }
+    const input = transaction && !financialChanged
+      ? { note: note || null }
+      : { type, quantity, price_per_unit: pricePerUnit, quote_currency: currency, date, note: note || null };
     try {
       if (transaction) {
         await updateTransaction.mutateAsync({ transactionId: transaction.id, input });
       } else {
-        await addTransaction.mutateAsync({ assetId: holding.asset_id, input });
+        await addTransaction.mutateAsync({ assetId: holding.asset_id, input: { type, quantity, price_per_unit: pricePerUnit, quote_currency: currency, date, note: note || null } });
       }
       onClose();
     } catch (err) {
       setError(
-        err instanceof ApiError && err.status === 400 ? t("crypto.form.errorSellTooMuch") : t("crypto.form.saveError")
+        err instanceof ApiError && err.message.includes("Cannot sell more") ? t("crypto.form.errorSellTooMuch") : t("crypto.form.saveError")
       );
     }
   }
@@ -87,6 +101,8 @@ export function CryptoTransactionModal({ open, onClose, holding, transaction = n
       title={isEditing ? t("crypto.form.editTradeTitle", { name: holding.name }) : t("crypto.form.tradeTitle", { name: holding.name })}
     >
       <form onSubmit={handleSubmit} className="space-y-3">
+        {transaction?.quote_currency === null && <p role="status" className="text-sm text-text-muted">{t("planning.reconcileQuote")}</p>}
+        <PlanningCurrencySelect id="planning-currency" value={currency} onChange={setCurrency} quote required={!transaction || transaction.quote_currency !== null} />
         <div className="grid grid-cols-2 gap-2">
           <button
             type="button"
@@ -115,7 +131,7 @@ export function CryptoTransactionModal({ open, onClose, holding, transaction = n
             <Label htmlFor="tx-quantity">{t("crypto.form.quantityLabel")}</Label>
             <Input
               id="tx-quantity"
-              type="number"
+              type="text" inputMode="decimal"
               step="any"
               min="0"
               required
@@ -128,7 +144,7 @@ export function CryptoTransactionModal({ open, onClose, holding, transaction = n
             <Label htmlFor="tx-price">{t("crypto.form.pricePerUnitLabel")}</Label>
             <Input
               id="tx-price"
-              type="number"
+              type="text" inputMode="decimal"
               step="any"
               min="0"
               required

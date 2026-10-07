@@ -24,7 +24,7 @@ export function analyticsCoordinate(value: string | null | undefined, status: Fi
 
 // Aggregate Decimals may exceed a single Numeric(20,6) row's size/scale.
 // Exponent is a decimal-position count, not a conversion of money to Number.
-function decimalParts(value: string): { units: bigint; scale: number } | null {
+export function decimalParts(value: string): { units: bigint; scale: number } | null {
   const match = /^([+-]?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(value);
   if (!match) return null;
   const exponent = Number(match[4] ?? "0");

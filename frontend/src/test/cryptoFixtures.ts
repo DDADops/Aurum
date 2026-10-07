@@ -8,6 +8,8 @@ let nextAssetId = 1;
 export function makeHolding(overrides: Partial<CryptoHolding> = {}): CryptoHolding {
   const id = overrides.asset_id ?? nextAssetId++;
   return {
+    complete: true, missing_rates: [], data_issues: [],
+    last_price_as_of_date: "2026-01-01", cost_basis_currency: "USD",
     currency: "USD",
     last_price_currency: "USD",
     asset_id: id,

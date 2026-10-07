@@ -16,6 +16,7 @@ export function useCreateGoal() {
   return useMutation({
     mutationFn: (input: GoalInput) => createGoal(input),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 }
 
@@ -24,6 +25,7 @@ export function useUpdateGoal() {
   return useMutation({
     mutationFn: ({ id, input }: { id: number; input: Partial<GoalInput> }) => updateGoal(id, input),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 }
 
@@ -32,6 +34,7 @@ export function useDeleteGoal() {
   return useMutation({
     mutationFn: (id: number) => deleteGoal(id),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 }
 
@@ -40,5 +43,6 @@ export function useAddGoalContribution() {
   return useMutation({
     mutationFn: ({ id, input }: { id: number; input: GoalContributionInput }) => addGoalContribution(id, input),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 }

@@ -1,3 +1,5 @@
+import { holdingTotal } from "@/lib/planningMoney";
+import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { useMemo, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -61,7 +63,7 @@ export function CryptoPage() {
   const [editingTransaction, setEditingTransaction] = useState<CryptoTransaction | null>(null);
 
   const holdings = data?.holdings ?? [];
-  const totalValue = holdings.reduce((sum, holding) => sum + (holding.value !== null ? Number(holding.value) : 0), 0);
+  const totalValue = holdingTotal(holdings, data?.currency, "value");
   const portfoliosById = useMemo(() => new Map((portfolios ?? []).map((p) => [p.id, p])), [portfolios]);
   const performance90dByAsset = useMemo(
     () => new Map((performance90d?.items ?? []).map((item) => [item.asset_id, item.price_change_percent])),
@@ -118,6 +120,7 @@ export function CryptoPage() {
         onEdit={openEditPortfolioModal}
       />
 
+      {data && <FinancialDataStatus status={data} />}
       <CryptoOverviewCard currency={data?.currency}
         totalValue={totalValue}
         history={history}

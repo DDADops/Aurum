@@ -116,6 +116,7 @@ export function useCreateCryptoHolding() {
   return useMutation({
     mutationFn: (input: CryptoHoldingCreateInput) => createCryptoHolding(input),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 }
 
@@ -125,15 +126,17 @@ export function useAddCryptoTransaction() {
     mutationFn: ({ assetId, input }: { assetId: number; input: CryptoTransactionInput }) =>
       addCryptoTransaction(assetId, input),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 }
 
 export function useUpdateCryptoTransaction() {
   const invalidate = useInvalidateCrypto();
   return useMutation({
-    mutationFn: ({ transactionId, input }: { transactionId: number; input: CryptoTransactionInput }) =>
+    mutationFn: ({ transactionId, input }: { transactionId: number; input: Partial<CryptoTransactionInput> }) =>
       updateCryptoTransaction(transactionId, input),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 }
 
@@ -142,6 +145,7 @@ export function useDeleteCryptoTransaction() {
   return useMutation({
     mutationFn: (transactionId: number) => deleteCryptoTransaction(transactionId),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 }
 
@@ -150,6 +154,7 @@ export function useDeleteCryptoHolding() {
   return useMutation({
     mutationFn: (assetId: number) => deleteCryptoHolding(assetId),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 }
 
@@ -159,6 +164,7 @@ export function useUpdateCryptoHoldingRisk() {
     mutationFn: ({ assetId, riskLevel }: { assetId: number; riskLevel: RiskLevel }) =>
       updateCryptoHoldingRisk(assetId, riskLevel),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 }
 
@@ -168,5 +174,6 @@ export function useUpdateCryptoHolding() {
     mutationFn: ({ assetId, input }: { assetId: number; input: CryptoHoldingUpdateInput }) =>
       updateCryptoHolding(assetId, input),
     onSuccess: invalidate,
+    onError: invalidate,
   });
 }

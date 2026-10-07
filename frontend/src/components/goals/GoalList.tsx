@@ -26,9 +26,9 @@ export function GoalList({ items, onContribute, onEdit, onDelete }: GoalListProp
   return (
     <ul className="divide-y divide-gridline">
       {items.map((goal) => {
-        const current = Number(goal.current_amount);
-        const target = Number(goal.target_amount);
-        const remaining = Number(goal.remaining);
+        const current = goal.current_amount;
+        const target = goal.target_amount;
+        const remaining = goal.remaining;
         const fillPercent = Math.min(100, goal.percent);
 
         return (

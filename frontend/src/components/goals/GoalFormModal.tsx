@@ -1,3 +1,6 @@
+import { PlanningCurrencySelect } from "@/components/ui/PlanningCurrencySelect";
+import { useAppSettings } from "@/hooks/useSettings";
+import { validPositiveDecimal } from "@/lib/planningMoney";
 import { useEffect, useState } from "react";
 import { Dialog } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
@@ -20,10 +23,13 @@ export function GoalFormModal({ open, onClose, goal }: GoalFormModalProps) {
   const updateGoal = useUpdateGoal();
 
   const [form, setForm] = useState(EMPTY_FORM);
+  const { data: settings } = useAppSettings();
+  const [currency, setCurrency] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    setCurrency(goal?.currency ?? settings?.currency ?? "");
     if (goal) {
       setForm({ name: goal.name, target_amount: goal.target_amount, target_date: goal.target_date ?? "" });
     } else {
@@ -32,13 +38,17 @@ export function GoalFormModal({ open, onClose, goal }: GoalFormModalProps) {
     setError(null);
   }, [open, goal]);
 
+  useEffect(() => { if (open && !goal && !currency && settings?.currency) setCurrency(settings.currency); }, [open, settings?.currency, currency, goal]);
+
   const isSaving = createGoal.isPending || updateGoal.isPending;
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
 
+    if (!currency || !validPositiveDecimal(form.target_amount, 20, 6)) { setError(t("planning.invalidMoney")); return; }
     const input = {
+      currency,
       name: form.name,
       target_amount: form.target_amount,
       target_date: form.target_date || null,
@@ -59,6 +69,7 @@ export function GoalFormModal({ open, onClose, goal }: GoalFormModalProps) {
   return (
     <Dialog open={open} onClose={onClose} title={goal ? t("goal.form.editTitle") : t("goal.form.newTitle")}>
       <form onSubmit={handleSubmit} className="space-y-3">
+        <PlanningCurrencySelect id="planning-currency" value={currency} onChange={setCurrency} />
         <div>
           <Label htmlFor="goal-name">{t("goal.form.nameLabel")}</Label>
           <Input
@@ -75,7 +86,7 @@ export function GoalFormModal({ open, onClose, goal }: GoalFormModalProps) {
             <Label htmlFor="goal-target">{t("goal.form.targetAmountLabel")}</Label>
             <Input
               id="goal-target"
-              type="number"
+              type="text" inputMode="decimal"
               step="0.000001"
               min="0.000001"
               required

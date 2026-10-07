@@ -1,3 +1,5 @@
+import { analyticsValue, metricStatus } from "@/lib/analytics";
+import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { Pencil, Trash2 } from "lucide-react";
 import { getCategoryIcon } from "@/lib/icons";
 import { formatCurrency } from "@/lib/format";
@@ -22,10 +24,11 @@ export function BudgetList({ items, onEdit, onDelete }: BudgetListProps) {
     <ul className="divide-y divide-gridline">
       {items.map((item) => {
         const Icon = getCategoryIcon(item.category_icon);
-        const spent = Number(item.spent);
-        const limit = Number(item.monthly_limit);
+        const spent = analyticsValue(item.spent, metricStatus(item, "spent"), item.currency);
+        const remaining = analyticsValue(item.remaining, metricStatus(item, "remaining"), item.currency);
+        const limit = item.monthly_limit;
         const barColor = item.is_over_budget ? "var(--danger)" : "var(--success)";
-        const fillPercent = Math.min(100, item.percent);
+        const fillPercent = item.percent === null ? null : Math.min(100, item.percent);
 
         return (
           <li key={item.budget_id} className="py-3">
@@ -40,7 +43,7 @@ export function BudgetList({ items, onEdit, onDelete }: BudgetListProps) {
                 {translateCategoryName(item.category_name)}
               </span>
               <span className="shrink-0 text-sm tabular-nums text-text-primary">
-                {formatCurrency(spent, item.currency)} <span className="text-text-muted">/ {formatCurrency(limit, item.currency)}</span>
+                {spent === null ? t("financial.unknown") : formatCurrency(spent, item.currency)} <span className="text-text-muted">/ {formatCurrency(limit, item.currency)}</span>
               </span>
               <span className="flex shrink-0 gap-1">
                 <button
@@ -61,7 +64,7 @@ export function BudgetList({ items, onEdit, onDelete }: BudgetListProps) {
                 </button>
               </span>
             </div>
-            <div className="mt-2 flex items-center gap-2 pl-12">
+            {fillPercent !== null && <div className="mt-2 flex items-center gap-2 pl-12">
               <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2">
                 <span
                   className="block h-full rounded-full"
@@ -69,13 +72,14 @@ export function BudgetList({ items, onEdit, onDelete }: BudgetListProps) {
                 />
               </span>
               <span className="w-10 shrink-0 text-right text-xs tabular-nums text-text-muted">
-                {item.percent.toFixed(0)}%
+                {item.percent?.toFixed(0)}%
               </span>
-            </div>
+            </div>}
+            <FinancialDataStatus status={item} />
             <p className="mt-1 pl-12 text-xs" style={{ color: item.is_over_budget ? "var(--danger)" : "var(--text-muted)" }}>
-              {item.is_over_budget
-                ? t("budget.overBy", { amount: formatCurrency(spent - limit, item.currency) })
-                : t("budget.remaining", { amount: formatCurrency(limit - spent, item.currency) })}
+              {remaining === null ? t("financial.unknown") : item.is_over_budget
+                ? t("budget.overBy", { amount: formatCurrency(remaining.replace(/^-/, ""), item.currency) })
+                : t("budget.remaining", { amount: formatCurrency(remaining, item.currency) })}
             </p>
           </li>
         );

@@ -1,3 +1,6 @@
+import { PlanningCurrencySelect } from "@/components/ui/PlanningCurrencySelect";
+import { useAppSettings } from "@/hooks/useSettings";
+import { validPositiveDecimal } from "@/lib/planningMoney";
 import { useEffect, useState } from "react";
 import { Dialog } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
@@ -25,6 +28,8 @@ export function BudgetFormModal({ open, onClose, budget, excludeCategoryIds }: B
 
   const [categoryId, setCategoryId] = useState("");
   const [monthlyLimit, setMonthlyLimit] = useState("");
+  const { data: settings } = useAppSettings();
+  const [currency, setCurrency] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const availableCategories = (categories ?? [])
@@ -33,6 +38,7 @@ export function BudgetFormModal({ open, onClose, budget, excludeCategoryIds }: B
 
   useEffect(() => {
     if (!open) return;
+    setCurrency(budget?.currency ?? settings?.currency ?? "");
     if (budget) {
       setCategoryId(String(budget.category_id));
       setMonthlyLimit(budget.monthly_limit);
@@ -45,17 +51,20 @@ export function BudgetFormModal({ open, onClose, budget, excludeCategoryIds }: B
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, budget]);
 
+  useEffect(() => { if (open && !budget && !currency && settings?.currency) setCurrency(settings.currency); }, [open, settings?.currency, currency, budget]);
+
   const isSaving = createBudget.isPending || updateBudget.isPending;
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
 
+    if (!currency || !validPositiveDecimal(monthlyLimit, 20, 6)) { setError(t("planning.invalidMoney")); return; }
     try {
       if (budget) {
-        await updateBudget.mutateAsync({ id: budget.id, monthlyLimit });
+        await updateBudget.mutateAsync({ id: budget.id, monthlyLimit, currency });
       } else {
-        await createBudget.mutateAsync({ category_id: Number(categoryId), monthly_limit: monthlyLimit });
+        await createBudget.mutateAsync({ category_id: Number(categoryId), monthly_limit: monthlyLimit, currency });
       }
       onClose();
     } catch {
@@ -66,6 +75,7 @@ export function BudgetFormModal({ open, onClose, budget, excludeCategoryIds }: B
   return (
     <Dialog open={open} onClose={onClose} title={budget ? t("budget.form.editTitle") : t("budget.form.newTitle")}>
       <form onSubmit={handleSubmit} className="space-y-3">
+        <PlanningCurrencySelect id="planning-currency" value={currency} onChange={setCurrency} />
         <div>
           <Label htmlFor="budget-category">{t("budget.form.categoryLabel")}</Label>
           {budget ? (
@@ -87,7 +97,7 @@ export function BudgetFormModal({ open, onClose, budget, excludeCategoryIds }: B
           <Label htmlFor="budget-limit">{t("budget.form.limitLabel")}</Label>
           <Input
             id="budget-limit"
-            type="number"
+            type="text" inputMode="decimal"
             step="0.000001"
             min="0.000001"
             required

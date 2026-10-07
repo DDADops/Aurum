@@ -13,8 +13,8 @@ export function createBudget(input: BudgetInput) {
   return api.post<Budget>("/budgets", input);
 }
 
-export function updateBudget(id: number, monthlyLimit: string) {
-  return api.patch<Budget>(`/budgets/${id}`, { monthly_limit: monthlyLimit });
+export function updateBudget(id: number, monthlyLimit: string, currency: string) {
+  return api.patch<Budget>(`/budgets/${id}`, { monthly_limit: monthlyLimit, currency });
 }
 
 export function deleteBudget(id: number) {

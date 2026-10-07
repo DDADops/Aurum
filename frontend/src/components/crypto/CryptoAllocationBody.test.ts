@@ -6,7 +6,7 @@ describe("buildSlices (per-coin allocation)", () => {
   it("keys each slice by asset_id, one per holding", () => {
     const holdings = [makeHolding({ asset_id: 7, name: "Bitcoin", symbol: "BTC", value: "100" })];
     const slices = buildSlices(holdings);
-    expect(slices).toEqual([{ key: "7", name: "Bitcoin", symbol: "BTC", amount: 100, color: "var(--series-1)" }]);
+    expect(slices).toEqual([{ key: "7", name: "Bitcoin", symbol: "BTC", amount: "100", color: "var(--series-1)" }]);
   });
 
   it("excludes unpriced and exactly-zero holdings", () => {
@@ -30,7 +30,7 @@ describe("buildSlices (per-coin allocation)", () => {
     expect(other.name).toBe("Other");
     expect(other.symbol).toBeNull();
     // The two smallest holdings: value 2 and value 1.
-    expect(other.amount).toBe(3);
+    expect(other.amount).toBe("3");
     expect(other.color).toBe("var(--series-other)");
   });
 

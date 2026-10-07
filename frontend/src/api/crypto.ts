@@ -31,10 +31,7 @@ export function deleteCryptoPortfolio(portfolioId: number) {
   return api.delete<void>(`/crypto/portfolios/${portfolioId}`);
 }
 
-// Also triggers the lazy once-a-day auto-refresh server-side — see
-// services/crypto_service.py. `portfolioId` only narrows what comes back in
-// `holdings` — the sync itself (and the 24h window) always covers every
-// portfolio, see refresh_prices' own docstring.
+// Reads cached prices and dated reference FX; only explicit refresh/creation contacts the provider.
 export function fetchCryptoHoldings(portfolioId?: number | null) {
   const query = portfolioId != null ? `?portfolio_id=${portfolioId}` : "";
   return api.get<CryptoSyncResult>(`/crypto/holdings${query}`);
@@ -65,7 +62,7 @@ export function fetchCryptoTransactions(assetId: number) {
   return api.get<CryptoTransaction[]>(`/crypto/holdings/${assetId}/transactions`);
 }
 
-export function updateCryptoTransaction(transactionId: number, input: CryptoTransactionInput) {
+export function updateCryptoTransaction(transactionId: number, input: Partial<CryptoTransactionInput>) {
   return api.patch<CryptoHolding>(`/crypto/transactions/${transactionId}`, input);
 }
 

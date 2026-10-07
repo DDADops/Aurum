@@ -1,8 +1,11 @@
+import { compareDecimals, sumDecimals, percentOf, holdingTotal } from "@/lib/planningMoney";
+import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { formatCurrency, maskAmount } from "@/lib/format";
 import { useTranslation, type TranslationKey } from "@/lib/i18n";
 import type { CryptoHolding, RiskLevel } from "@/types";
 
 interface CryptoRiskAllocationBodyProps {
+  currency: string | undefined;
   holdings: CryptoHolding[];
   isLoading: boolean;
   hidden: boolean;
@@ -22,13 +25,13 @@ const RISK_LEVELS: RiskLevel[] = ["low", "medium", "high"];
 export interface RiskTierItem {
   symbol: string;
   name: string;
-  value: number;
+  value: string;
   percent: number;
 }
 
 export interface RiskTier {
   level: RiskLevel;
-  value: number;
+  value: string;
   percent: number;
   items: RiskTierItem[];
 }
@@ -38,25 +41,23 @@ export interface RiskTier {
  * tier — pulled out of the component so it's testable without rendering
  * (see format.test.ts-style coverage in CryptoRiskAllocationBody.test.ts). */
 export function computeRiskTiers(holdings: CryptoHolding[]): RiskTier[] {
-  // Unpriced holdings (CoinGecko never successfully priced them yet) can't
-  // contribute a % of portfolio value — same "best data on hand" principle
-  // the rest of the Crypto tab already follows for a null value/price.
+  if (holdings.some((h) => h.value === null)) return [];
   const priced = holdings.filter((h) => h.value !== null);
-  const totalValue = priced.reduce((sum, h) => sum + Number(h.value), 0);
+  const totalValue = sumDecimals(priced.map((h) => h.value!));
 
   return RISK_LEVELS.map((level) => {
     const items = priced
       .filter((h) => h.risk_level === level)
-      .map((h) => ({ symbol: h.symbol, name: h.name, value: Number(h.value) }))
-      .sort((a, b) => b.value - a.value);
-    const tierValue = items.reduce((sum, item) => sum + item.value, 0);
+      .map((h) => ({ symbol: h.symbol, name: h.name, value: h.value! }))
+      .sort((a, b) => compareDecimals(b.value, a.value));
+    const tierValue = sumDecimals(items.map((item) => item.value));
     return {
       level,
       value: tierValue,
-      percent: totalValue > 0 ? (tierValue / totalValue) * 100 : 0,
+      percent: percentOf(tierValue, totalValue) ?? 0,
       items: items.map((item) => ({
         ...item,
-        percent: tierValue > 0 ? (item.value / tierValue) * 100 : 0,
+        percent: percentOf(item.value, tierValue) ?? 0,
       })),
     };
   });
@@ -68,7 +69,7 @@ export function computeRiskTiers(holdings: CryptoHolding[]): RiskTier[] {
  * memecoins" doesn't get diluted by cash/real estate/etc. Entirely
  * client-side: every holding already carries value + risk_level from
  * GET /crypto/holdings, no separate endpoint needed. */
-export function CryptoRiskAllocationBody({ holdings, isLoading, hidden }: CryptoRiskAllocationBodyProps) {
+export function CryptoRiskAllocationBody({ currency, holdings, isLoading, hidden }: CryptoRiskAllocationBodyProps) {
   const { t } = useTranslation();
 
   if (isLoading) {
@@ -78,6 +79,7 @@ export function CryptoRiskAllocationBody({ holdings, isLoading, hidden }: Crypto
     return <p className="py-10 text-center text-sm text-text-muted">{t("crypto.empty")}</p>;
   }
 
+  if (holdingTotal(holdings, currency, "value") === null) return <FinancialDataStatus />;
   const tiers = computeRiskTiers(holdings);
 
   return (
@@ -89,7 +91,7 @@ export function CryptoRiskAllocationBody({ holdings, isLoading, hidden }: Crypto
             {t(`netWorth.riskLevel.${tier.level}` as TranslationKey)}
           </p>
           <p className="mt-1.5 text-xl font-semibold tabular-nums text-text-primary">
-            {maskAmount(formatCurrency(tier.value, holdings[0]?.currency), hidden)}
+            {maskAmount(formatCurrency(tier.value, currency), hidden)}
           </p>
           <p className="mt-1 text-xs text-text-muted">
             {tier.percent.toFixed(1)}% {t("crypto.riskAllocationOfPortfolio")}

@@ -1,3 +1,5 @@
+import { analyticsCoordinate, analyticsValue, metricStatus } from "@/lib/analytics";
+import { FinancialDataStatus } from "@/components/ui/FinancialDataStatus";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, YAxis } from "recharts";
 import { formatCurrency, getIntlLocale, maskAmount } from "@/lib/format";
 import { useTranslation } from "@/lib/i18n";
@@ -21,15 +23,16 @@ function ChartTooltip({
 }: {
   currency: string | undefined;
   active?: boolean;
-  payload?: Array<{ payload: { date: string; value: number } }>;
+  payload?: Array<{ payload: { date: string; value: number | null; original: string | null } }>;
   hidden: boolean;
 }) {
   if (!active || !payload?.length) return null;
   const point = payload[0].payload;
+  if (point.original === null) return null;
   return (
     <div className="rounded-lg border border-border bg-surface-1 px-3 py-2 text-sm shadow-md">
       <p className="text-text-muted">{formatAxisDate(point.date)}</p>
-      <p className="font-medium text-text-primary">{maskAmount(formatCurrency(point.value, currency), hidden)}</p>
+      <p className="font-medium text-text-primary">{maskAmount(formatCurrency(point.original, currency), hidden)}</p>
     </div>
   );
 }
@@ -39,16 +42,18 @@ function ChartTooltip({
  * number, eye toggle, and range pills live in the shared header instead). */
 export function CryptoHistoryChartBody({ history, isLoading, hidden }: CryptoHistoryChartBodyProps) {
   const { t } = useTranslation();
-  const isPositive = history ? Number(history.change_amount) >= 0 : true;
+  const isPositive = history?.change_amount != null && !history.change_amount.startsWith("-");
   const trendColor = isPositive ? "var(--success)" : "var(--danger)";
-  const chartData = history?.series.map((point) => ({ date: point.date, value: Number(point.value) })) ?? [];
+  const chartData = history?.series.map((point) => ({ date: point.date, value: analyticsCoordinate(point.value, point, history.currency), original: analyticsValue(point.value, point, history.currency) })) ?? [];
 
   return (
     <>
+      {history && <FinancialDataStatus status={metricStatus(history, "series")} />}
+      {chartData.some((p) => p.value === null) && <p>{t("financial.chartGaps")}</p>}
       <div className="h-56 w-full sm:h-64">
         {isLoading || chartData.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-text-muted">
-            {isLoading ? t("common.loading") : t("netWorth.noChartData")}
+            {isLoading ? t("common.loading") : history?.complete === false ? t("financial.unknown") : t("netWorth.noChartData")}
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
@@ -62,6 +67,7 @@ export function CryptoHistoryChartBody({ history, isLoading, hidden }: CryptoHis
               <YAxis hide domain={["auto", "auto"]} />
               <Tooltip content={<ChartTooltip currency={history?.currency} hidden={hidden} />} cursor={{ stroke: "var(--gridline)", strokeWidth: 1 }} />
               <Area
+                connectNulls={false}
                 type="monotone"
                 dataKey="value"
                 stroke={trendColor}

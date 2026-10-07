@@ -1,3 +1,4 @@
+import { holdingTotal, percentOf } from "@/lib/planningMoney";
 import type { ReactNode } from "react";
 import { Card, CardContent } from "@/components/ui/Card";
 import { formatCurrency, maskAmount } from "@/lib/format";
@@ -21,9 +22,9 @@ interface CryptoStatsRowProps {
 }
 
 interface Totals {
-  totalValue: number;
-  totalCostBasis: number;
-  totalProfitLoss: number;
+  totalValue: string | null;
+  totalCostBasis: string | null;
+  totalProfitLoss: string | null;
   totalProfitLossPercent: number | null;
   best: { holding: CryptoHolding; percent: number } | null;
   worst: { holding: CryptoHolding; percent: number } | null;
@@ -53,25 +54,24 @@ function changePercentFor(
 
 function computeTotals(
   holdings: CryptoHolding[],
+  currency: string | undefined,
   range: CryptoRange,
   performance90d: Map<number, number | null> | undefined
 ): Totals {
-  let totalValue = 0;
-  let totalCostBasis = 0;
+  const totalValue = holdingTotal(holdings, currency, "value");
+  const totalCostBasis = holdingTotal(holdings, currency, "cost_basis");
   let best: Totals["best"] = null;
   let worst: Totals["worst"] = null;
 
   for (const holding of holdings) {
-    if (holding.value !== null) totalValue += Number(holding.value);
-    if (holding.cost_basis !== null) totalCostBasis += Number(holding.cost_basis);
     const percent = changePercentFor(holding, range, performance90d);
     if (percent === null) continue;
     if (best === null || percent > best.percent) best = { holding, percent };
     if (worst === null || percent < worst.percent) worst = { holding, percent };
   }
 
-  const totalProfitLoss = totalValue - totalCostBasis;
-  const totalProfitLossPercent = totalCostBasis > 0 ? (totalProfitLoss / totalCostBasis) * 100 : null;
+  const totalProfitLoss = holdingTotal(holdings, currency, "profit_loss");
+  const totalProfitLossPercent = totalProfitLoss !== null && totalCostBasis !== null ? percentOf(totalProfitLoss, totalCostBasis) : null;
 
   return { totalValue, totalCostBasis, totalProfitLoss, totalProfitLossPercent, best, worst };
 }
@@ -153,8 +153,8 @@ export function CryptoStatsRow({ currency,
   }
   if (holdings.length === 0) return null;
 
-  const totals = computeTotals(holdings, range, performance90d);
-  const profitColor = totals.totalProfitLoss >= 0 ? "var(--success)" : "var(--danger)";
+  const totals = computeTotals(holdings, currency, range, performance90d);
+  const profitColor = totals.totalProfitLoss !== null && !totals.totalProfitLoss.startsWith("-") ? "var(--success)" : "var(--danger)";
   const rangeLabel = range === "all" ? t("common.allShort") : RANGE_LABELS[range];
   const performerLoading = range === "90d" && isPerformance90dLoading;
 
@@ -162,7 +162,7 @@ export function CryptoStatsRow({ currency,
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
       <StatTile label={t("crypto.stats.allTimeProfit")}>
         <p className="text-lg font-semibold tabular-nums" style={{ color: profitColor }}>
-          {maskAmount(`${totals.totalProfitLoss >= 0 ? "+" : ""}${formatCurrency(totals.totalProfitLoss, currency)}`, hidden)}
+          {maskAmount(totals.totalProfitLoss === null ? t("financial.unknown") : `${totals.totalProfitLoss !== null && !totals.totalProfitLoss.startsWith("-") ? "+" : ""}${formatCurrency(totals.totalProfitLoss, currency)}`, hidden)}
         </p>
         {totals.totalProfitLossPercent !== null && (
           <p className="mt-0.5 text-sm font-medium tabular-nums" style={{ color: profitColor }}>
@@ -174,7 +174,7 @@ export function CryptoStatsRow({ currency,
 
       <StatTile label={t("crypto.stats.costBasis")}>
         <p className="text-lg font-semibold tabular-nums text-text-primary">
-          {maskAmount(formatCurrency(totals.totalCostBasis, currency), hidden)}
+          {maskAmount(totals.totalCostBasis === null ? t("financial.unknown") : formatCurrency(totals.totalCostBasis, currency), hidden)}
         </p>
         <p className="mt-0.5 text-xs text-text-muted">{t("crypto.stats.costBasisHint")}</p>
       </StatTile>

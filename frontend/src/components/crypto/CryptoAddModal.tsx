@@ -1,3 +1,6 @@
+import { PlanningCurrencySelect } from "@/components/ui/PlanningCurrencySelect";
+import { useAppSettings } from "@/hooks/useSettings";
+import { validPositiveDecimal } from "@/lib/planningMoney";
 import { type FormEvent, useEffect, useState } from "react";
 import { ApiError } from "@/api/client";
 import { searchCryptoCoins } from "@/api/crypto";
@@ -47,6 +50,8 @@ export function CryptoAddModal({ open, onClose, defaultPortfolioId }: CryptoAddM
   // own textbook HIGH risk example — but overridable per coin here.
   const [riskLevel, setRiskLevel] = useState<RiskLevel>("high");
   const [network, setNetwork] = useState("");
+  const { data: settings } = useAppSettings();
+  const [currency, setCurrency] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -100,10 +105,16 @@ export function CryptoAddModal({ open, onClose, defaultPortfolioId }: CryptoAddM
     return () => clearTimeout(timer);
   }, [query, open, selected, t]);
 
+  useEffect(() => {
+    if (!open) setCurrency("");
+    else if (!currency && settings?.currency) setCurrency(settings.currency);
+  }, [open, currency, settings?.currency]);
+
   async function handleSave(event: FormEvent) {
     event.preventDefault();
     if (!selected) return;
     setSaveError(null);
+    if (!currency || !validPositiveDecimal(quantity, 38, 18) || !validPositiveDecimal(pricePerUnit, 38, 18)) { setSaveError(t("planning.invalidCrypto")); return; }
     try {
       await createHolding.mutateAsync({
         portfolio_id: portfolioId,
@@ -111,6 +122,7 @@ export function CryptoAddModal({ open, onClose, defaultPortfolioId }: CryptoAddM
         symbol: selected.symbol,
         name: selected.name,
         thumb_url: selected.thumb_url,
+        quote_currency: currency,
         quantity,
         price_per_unit: pricePerUnit,
         date,
@@ -169,6 +181,7 @@ export function CryptoAddModal({ open, onClose, defaultPortfolioId }: CryptoAddM
         </div>
       ) : (
         <form onSubmit={handleSave} className="space-y-3">
+        <PlanningCurrencySelect id="planning-currency" value={currency} onChange={setCurrency} quote />
           <div className="flex items-center gap-3 rounded-lg bg-surface-2 p-2">
             {selected.thumb_url ? (
               <img src={selected.thumb_url} alt="" className="h-6 w-6 shrink-0 rounded-full" />
@@ -203,7 +216,7 @@ export function CryptoAddModal({ open, onClose, defaultPortfolioId }: CryptoAddM
               <Label htmlFor="crypto-quantity">{t("crypto.form.quantityLabel")}</Label>
               <Input
                 id="crypto-quantity"
-                type="number"
+                type="text" inputMode="decimal"
                 step="any"
                 min="0"
                 required
@@ -216,7 +229,7 @@ export function CryptoAddModal({ open, onClose, defaultPortfolioId }: CryptoAddM
               <Label htmlFor="crypto-price">{t("crypto.form.pricePerUnitLabel")}</Label>
               <Input
                 id="crypto-price"
-                type="number"
+                type="text" inputMode="decimal"
                 step="any"
                 min="0"
                 required

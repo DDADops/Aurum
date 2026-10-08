@@ -1,0 +1,18 @@
+[Unit]
+Description=Aurum completed UTC reference FX ingestion
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/aurum
+EnvironmentFile=/etc/aurum/fx.env
+StateDirectory=aurum-fx
+StateDirectoryMode=0700
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/aurum/deploy/fx/sync.py
+TimeoutStartSec=infinity
+StandardOutput=journal
+StandardError=journal

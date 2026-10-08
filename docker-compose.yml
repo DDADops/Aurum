@@ -22,6 +22,9 @@ services:
       retries: 10
 
   backend:
+    # One-off FX CLI: run --rm --no-deps -e AURUM_OXR_APP_ID backend
+    # python -m scripts.sync_fx ... replaces image CMD (no migrations/Uvicorn).
+    # See deploy/fx/README.md; do not add the provider key to the web backend.
     build: ./backend
     restart: unless-stopped
     # Nothing here ever needs to gain privileges (no setuid binaries, no sudo),

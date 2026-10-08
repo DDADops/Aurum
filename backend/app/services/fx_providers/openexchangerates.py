@@ -17,6 +17,7 @@ from app.schemas.fx import FxObservation
 
 SOURCE = "openexchangerates:historical:USD"
 MAX_DAYS = 31
+MAX_RESPONSE_BYTES = 2_000_000
 
 
 class ProviderError(Exception):
@@ -102,32 +103,44 @@ class OpenExchangeRatesProvider:
         # Header authentication keeps credentials out of URLs and HTTPX request logs.
         # Redirects are never followed. No API call uses a paid base/symbols option.
         async with httpx.AsyncClient(timeout=10, follow_redirects=False, transport=self._transport,
-                                     headers={"Authorization": f"Token {self._app_id}"}) as client:
+                                     headers={"Authorization": f"Token {self._app_id}", "Accept-Encoding": "identity"}) as client:
             for day in days:
                 content = await self._fetch_day(client, day)
                 result.extend(_parse(content, day, quotes))
         return result
 
+    async def _read_response(self, client: httpx.AsyncClient, day: date) -> tuple[int, str, bytes]:
+        async with client.stream("GET", f"https://openexchangerates.org/api/historical/{day.isoformat()}.json") as response:
+            if response.status_code != 200:
+                # Error bodies are neither buffered nor inspected.
+                return response.status_code, response.headers.get("Retry-After", ""), b""
+            # Request identity encoding and fail closed if ignored: automatic
+            # decompression can allocate an unbounded chunk before our size check.
+            if response.headers.get("Content-Encoding", "identity").lower() != "identity":
+                raise ProviderError("invalid_provider_payload")
+            content = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(chunk) > MAX_RESPONSE_BYTES - len(content):
+                    raise ProviderError("provider_payload_too_large")
+                content.extend(chunk)
+            return response.status_code, "", bytes(content)
+
     async def _fetch_day(self, client: httpx.AsyncClient, day: date) -> bytes:
         for attempt in range(3):
             delay = 0.5 * 2 ** attempt
             try:
-                response = await asyncio.wait_for(client.get(
-                    f"https://openexchangerates.org/api/historical/{day.isoformat()}.json"), timeout=15)
+                # The deadline covers headers, streaming and response cleanup.
+                status, retry_after, content = await asyncio.wait_for(self._read_response(client, day), timeout=15)
             except (httpx.TransportError, TimeoutError):
                 code = "provider_transport_failure"
             else:
-                status = response.status_code
                 if status == 200:
-                    if len(response.content) > 2_000_000:
-                        raise ProviderError("provider_payload_too_large")
-                    return response.content
+                    return content
                 if status in (401, 403):
                     raise ProviderError("provider_authentication_failed")
                 if status != 429 and not 500 <= status <= 599:
                     raise ProviderError("provider_request_rejected")
                 code = "provider_rate_limited" if status == 429 else "provider_unavailable"
-                retry_after = response.headers.get("Retry-After", "")
                 if retry_after.isascii() and retry_after.isdigit() and len(retry_after) <= 6:
                     delay = min(5, max(delay, int(retry_after)))
             if attempt == 2:

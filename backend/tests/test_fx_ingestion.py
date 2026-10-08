@@ -322,3 +322,108 @@ async def test_dry_run_reports_conflict_without_upsert(test_sessionmaker, monkey
     assert result.observations_inserted == 0
     assert (await stored(test_sessionmaker))[0].source == "original"
     forbidden.assert_not_called()
+
+
+class GeneratedStream(httpx.AsyncByteStream):
+    """Generate chunks lazily without allocating the advertised full response."""
+    def __init__(self, total, chunk_size=65536):
+        self.total = total
+        self.chunk_size = chunk_size
+        self.received = 0
+        self.closed = False
+
+    async def __aiter__(self):
+        while self.received < self.total:
+            size = min(self.chunk_size, self.total - self.received)
+            self.received += size
+            yield b" " * size
+
+    async def aclose(self):
+        self.closed = True
+
+
+@pytest.mark.parametrize("total", [2_000_001, 1_000_000_000])
+async def test_stream_limit_aborts_immediately_with_bounded_allocation(total):
+    import tracemalloc
+    stream = GeneratedStream(total)
+    calls = 0
+    def handle(request):
+        nonlocal calls
+        calls += 1
+        assert request.headers["Accept-Encoding"] == "identity"
+        # No Content-Length: the limit must be enforced while reading.
+        return httpx.Response(200, stream=stream)
+    adapter = oxr.OpenExchangeRatesProvider(SECRET, transport=httpx.MockTransport(handle))
+    tracemalloc.start()
+    try:
+        with pytest.raises(oxr.ProviderError, match="provider_payload_too_large"):
+            await adapter.fetch_observations(currencies=["RUB"], dates=[DAY])
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert stream.closed and calls == 1
+    assert stream.received == min(total, (oxr.MAX_RESPONSE_BYTES // stream.chunk_size + 1) * stream.chunk_size)
+    # The logical 1 GB response must not be consumed or accumulated. Allow
+    # allocator/HTTPX overhead while keeping a constant bound independent of total.
+    assert peak < 8_000_000
+
+
+async def test_exact_stream_limit_is_accepted_without_rounding():
+    content = body()
+    padded = content + b" " * (oxr.MAX_RESPONSE_BYTES - len(content))
+    class Stream(httpx.AsyncByteStream):
+        closed = False
+        async def __aiter__(self):
+            for offset in range(0, len(padded), 8192):
+                yield padded[offset:offset + 8192]
+        async def aclose(self):
+            self.closed = True
+    stream = Stream()
+    adapter = oxr.OpenExchangeRatesProvider(SECRET, transport=httpx.MockTransport(lambda _: httpx.Response(200, stream=stream)))
+    rows = await adapter.fetch_observations(currencies=["RUB"], dates=[DAY])
+    assert rows[0].rate == Decimal("61.123456789123456789") and stream.closed
+
+
+@pytest.mark.parametrize("status", [401, 403, 429, 500])
+async def test_error_streams_are_closed_without_reading(monkeypatch, status):
+    monkeypatch.setattr(oxr.asyncio, "sleep", AsyncMock())
+    streams = []
+    def handle(request):
+        stream = GeneratedStream(1_000_000_000)
+        streams.append(stream)
+        return httpx.Response(status, stream=stream)
+    adapter = oxr.OpenExchangeRatesProvider(SECRET, transport=httpx.MockTransport(handle))
+    with pytest.raises(oxr.ProviderError):
+        await adapter.fetch_observations(currencies=["RUB"], dates=[DAY])
+    assert len(streams) == (1 if status in (401, 403) else 3)
+    assert all(s.closed and s.received == 0 for s in streams)
+
+
+async def test_stream_timeout_closes_and_retries_without_partial_buffer(monkeypatch):
+    monkeypatch.setattr(oxr.asyncio, "sleep", AsyncMock())
+    streams = []
+    class Stream(httpx.AsyncByteStream):
+        closed = False
+        async def __aiter__(self):
+            yield b'{"base":'
+            raise httpx.ReadTimeout(SECRET)
+        async def aclose(self):
+            self.closed = True
+    def handle(request):
+        stream = Stream()
+        streams.append(stream)
+        return httpx.Response(200, stream=stream)
+    adapter = oxr.OpenExchangeRatesProvider(SECRET, transport=httpx.MockTransport(handle))
+    with pytest.raises(oxr.ProviderError, match="provider_transport_failure") as exc:
+        await adapter.fetch_observations(currencies=["RUB"], dates=[DAY])
+    assert SECRET not in str(exc.value)
+    assert len(streams) == 3 and all(s.closed for s in streams)
+
+
+async def test_unexpected_compression_rejected_before_decompression():
+    stream = GeneratedStream(1_000_000_000)
+    adapter = oxr.OpenExchangeRatesProvider(SECRET, transport=httpx.MockTransport(
+        lambda _: httpx.Response(200, headers={"Content-Encoding": "gzip"}, stream=stream)))
+    with pytest.raises(oxr.ProviderError, match="invalid_provider_payload"):
+        await adapter.fetch_observations(currencies=["RUB"], dates=[DAY])
+    assert stream.closed and stream.received == 0

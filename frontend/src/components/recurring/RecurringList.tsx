@@ -66,6 +66,8 @@ export function RecurringList({ items, onPost, onEdit, onDelete, isPosting }: Re
             >
               {isTransfer ? "" : isExpense ? "-" : "+"}
               {formatCurrency(item.amount, item.amount_currency)}
+              {isTransfer && <> → {item.transfer_amount !== null && item.transfer_amount_currency
+                ? formatCurrency(item.transfer_amount, item.transfer_amount_currency) : t("financial.unknown")}</>}
             </span>
 
             <span className="flex shrink-0 gap-1">

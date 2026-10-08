@@ -172,7 +172,9 @@ export interface TransactionInput {
 }
 
 export interface RecurringTransaction {
-  amount_currency: string | null;
+  amount_currency: string;
+  transfer_amount: string | null;
+  transfer_amount_currency: string | null;
   id: number;
   account_id: number;
   account_name: string;
@@ -197,6 +199,10 @@ export interface RecurringTransaction {
 }
 
 export interface RecurringTransactionInput {
+  amount_currency?: string;
+  transfer_amount?: string | null;
+  transfer_amount_currency?: string | null;
+  notes?: string | null;
   account_id: number;
   category_id: number | null;
   transfer_account_id: number | null;
@@ -207,6 +213,8 @@ export interface RecurringTransactionInput {
   frequency: RecurringFrequency;
   anchor_date: string;
 }
+
+export type RecurringTransactionUpdateInput = Partial<RecurringTransactionInput> & { is_active?: boolean };
 
 // One subcategory's (or the parent's own direct, un-subcategorized) share
 // of a CategoryBreakdownItem's total. Populated only when more than one

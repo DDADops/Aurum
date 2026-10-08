@@ -6,14 +6,14 @@ import {
   postRecurring,
   updateRecurring,
 } from "@/api/recurring";
-import type { RecurringTransactionInput } from "@/types";
+import type { RecurringTransactionInput, RecurringTransactionUpdateInput } from "@/types";
 
 function useInvalidateRecurring() {
   const queryClient = useQueryClient();
   return (alsoInvalidateTransactions: boolean) => {
     queryClient.invalidateQueries({ queryKey: ["recurring"] });
+    queryClient.invalidateQueries({ queryKey: ["accounts"] });
     if (alsoInvalidateTransactions) {
-      queryClient.invalidateQueries({ queryKey: ["accounts"] });
       // Posting creates a real Transaction — refresh everything derived from it.
       queryClient.invalidateQueries({ queryKey: ["transactions"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
@@ -37,15 +37,19 @@ export function useCreateRecurring() {
   return useMutation({
     mutationFn: (input: RecurringTransactionInput) => createRecurring(input),
     onSuccess: () => invalidate(false),
+    onError: () => invalidate(false),
+    retry: false,
   });
 }
 
 export function useUpdateRecurring() {
   const invalidate = useInvalidateRecurring();
   return useMutation({
-    mutationFn: ({ id, input }: { id: number; input: Partial<RecurringTransactionInput> }) =>
+    mutationFn: ({ id, input }: { id: number; input: RecurringTransactionUpdateInput }) =>
       updateRecurring(id, input),
     onSuccess: () => invalidate(false),
+    onError: () => invalidate(false),
+    retry: false,
   });
 }
 
@@ -54,6 +58,8 @@ export function useDeleteRecurring() {
   return useMutation({
     mutationFn: (id: number) => deleteRecurring(id),
     onSuccess: () => invalidate(false),
+    onError: () => invalidate(false),
+    retry: false,
   });
 }
 
@@ -62,5 +68,7 @@ export function usePostRecurring() {
   return useMutation({
     mutationFn: (id: number) => postRecurring(id),
     onSuccess: () => invalidate(true),
+    onError: () => invalidate(true),
+    retry: false,
   });
 }

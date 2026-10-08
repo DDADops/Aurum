@@ -6,6 +6,7 @@ import { RecurringList } from "@/components/recurring/RecurringList";
 import { RecurringFormModal } from "@/components/recurring/RecurringFormModal";
 import { useDeleteRecurring, usePostRecurring, useRecurring } from "@/hooks/useRecurring";
 import { useTranslation } from "@/lib/i18n";
+import { recurringErrorKey } from "@/lib/recurring";
 import type { RecurringTransaction } from "@/types";
 
 export function RecurringPage() {
@@ -48,6 +49,7 @@ export function RecurringPage() {
           </Button>
         </CardHeader>
         <CardContent>
+          {postRecurring.error && <p role="alert" className="mb-3 text-sm text-danger">{t(recurringErrorKey(postRecurring.error, true))}</p>}
           {isLoading ? (
             <p className="py-10 text-center text-sm text-text-muted">{t("common.loading")}</p>
           ) : (

@@ -883,3 +883,71 @@ base changes without persisted mutation, low ambient precision, deterministic
 sorting, offline GET SQL/network guards and dimensionless 90d behavior.
 Existing Stage 1 migration/concurrency/write tests remain regression coverage;
 only assertions about deliberately replaced read behavior are updated.
+
+## Explicit historical reference FX ingestion
+
+`python -m scripts.sync_fx` is an operator-invoked command, never an API GET,
+startup action, migration, scheduled task or deployed worker. No deployment
+configuration is installed by this stage. Run from `backend/` with the existing
+`AURUM_POSTGRES_*` configuration and `AURUM_OXR_APP_ID` supplied securely in the
+process environment (not a CLI argument). The App ID must be 32 hexadecimal
+characters. It is sent in an Authorization header, never in the request URL.
+
+```sh
+python -m scripts.sync_fx --from 2026-09-01 --to 2026-09-07 --dry-run
+python -m scripts.sync_fx --from 2026-09-01 --to 2026-09-07
+python -m scripts.sync_fx --from 2020-01-01 --to 2020-01-07 --currencies RUB,VND,EUR,CNY --dry-run
+```
+
+The inclusive range is limited to 31 days, starting no earlier than 1999-01-01;
+today and future UTC dates are rejected. Default coverage is every supported
+Aurum currency except USD. `--currencies` narrows the requested coverage, useful
+where a currency did not exist on a historical date. USD is a base, not a stored
+identity observation. No historical currencies are substituted or synthesized.
+
+Provider assumptions: Open Exchange Rates historical/YYYY-MM-DD.json uses USD
+by default, supplies numeric rates per one USD, and identifies the published
+UTC day with timestamp. All requested dates must match exactly. Full provider
+responses may contain additional currencies; only requested supported quotes
+are imported. Duplicate JSON keys, invalid rates, wrong dates/base, or malformed
+payloads reject the whole batch. Missing requested observations also prevent all
+writes. No paid base/symbol filtering feature is requested. Historical currency
+availability, account permissions and quotas remain provider-dependent.
+
+Official API references:
+- https://docs.openexchangerates.org/reference/historical-json
+- https://docs.openexchangerates.org/reference/authentication
+
+Network calls precede opening the DB session. There are at most three attempts
+per date, 10-second HTTP phase timeouts and a 15-second request deadline; transient
+transport, 429 and 5xx failures use bounded backoff. Numeric Retry-After is capped
+at five seconds. Authentication/other non-success statuses fail without retries;
+redirects are not followed. Provider bodies and exception details are not emitted.
+
+The complete batch is validated before a short READ COMMITTED transaction locks
+fx_rates in SHARE ROW EXCLUSIVE mode (five-second lock timeout). This blocks
+other table writers, including writers not using this CLI, while ordinary reads
+remain possible. Existing equal rate/source rows retain their ID and fetched_at.
+Any different rate OR source rejects the whole batch; there is no overwrite flag.
+New rows use the existing upsert service only after the protected conflict check.
+Any insert/commit failure rolls back the entire batch. Other existing writers
+still retain their own semantics after the ingestion lock is released.
+
+Dry-run fetches the provider and reads PostgreSQL in a READ ONLY transaction:
+it writes neither rows nor sequences. Its counts are a preview, not a reservation;
+a write invocation refetches and rechecks. JSON output reports dates_requested,
+observations_inserted (committed only), observations_to_insert,
+identical_observations, conflicting_observations, missing_observations, errors,
+and exit_code. If the provider fails before completing the batch, errors are
+reported and coverage is unknown; missing_observations is not a coverage proof.
+
+Exit codes: 0 success; 2 invalid arguments/credentials; 3 provider/invalid batch;
+4 missing observations; 5 existing rate/source conflict; 6 configuration/DB error
+(including lock timeout). No partial commit or silent historical correction is
+allowed. Take a backup before an initial write. Stop ingestion during a restore:
+table locks serialize the operations, but do not prevent a queued job running
+after restore. There is no ingestion revision journal or automatic rollback tool.
+
+`test_fx_ingestion.py` uses mocked HTTP plus real PostgreSQL for atomicity,
+concurrent same/different-rate jobs, provenance preservation, dry-run, malformed
+responses, HTTP failures, CLI exit codes and isolation from normal GET requests.

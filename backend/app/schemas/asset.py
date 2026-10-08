@@ -9,6 +9,7 @@ from app.models.enums import AssetClass, CapitalRole, RiskLevel
 
 
 class AssetValuationCreate(BaseModel):
+    expected_currency: CurrencyCode
     value: Valuation = Field(ge=0)
     as_of_date: date_ = Field(default_factory=date_.today)
 

@@ -685,7 +685,10 @@ Actual model inventory:
 
 Every production valuation writer uses valuation_service.write_valuation:
 - POST /assets creates the initial manual native valuation under its Asset lock.
-- POST /assets/{id}/valuations locks/re-reads Asset and uses its currency.
+- POST /assets/{id}/valuations requires expected_currency, locks/re-reads Asset,
+  rejects mismatched intent with 409 asset_currency_mismatch, and uses the locked
+  currency without FX conversion. test_asset_currency_intent.py covers both
+  PostgreSQL serialization orders and exact Decimal preservation.
 - Crypto holding creation seeds an observation in the exact provider quote.
 - Crypto refresh (forced POST or lazy GET) writes quantity * provider price in
   the exact requested quote, which may differ from Asset.currency.

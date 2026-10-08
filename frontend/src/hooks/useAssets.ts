@@ -4,10 +4,10 @@ import type { AssetInput, AssetUpdateInput, AssetValuationInput } from "@/types"
 
 function useInvalidateNetWorth() {
   const queryClient = useQueryClient();
-  return () => {
-    queryClient.invalidateQueries({ queryKey: ["assets"] });
-    queryClient.invalidateQueries({ queryKey: ["net-worth-summary"] });
-  };
+  return () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["assets"], refetchType: "all" }),
+      queryClient.invalidateQueries({ queryKey: ["net-worth-summary"] }),
+  ]);
 }
 
 export function useAssets() {
@@ -19,6 +19,8 @@ export function useCreateAsset() {
   return useMutation({
     mutationFn: (input: AssetInput) => createAsset(input),
     onSuccess: invalidate,
+    onError: invalidate,
+    retry: false,
   });
 }
 
@@ -27,6 +29,8 @@ export function useUpdateAsset() {
   return useMutation({
     mutationFn: ({ id, input }: { id: number; input: AssetUpdateInput }) => updateAsset(id, input),
     onSuccess: invalidate,
+    onError: invalidate,
+    retry: false,
   });
 }
 
@@ -35,6 +39,8 @@ export function useAddAssetValuation() {
   return useMutation({
     mutationFn: ({ id, input }: { id: number; input: AssetValuationInput }) => addAssetValuation(id, input),
     onSuccess: invalidate,
+    onError: invalidate,
+    retry: false,
   });
 }
 

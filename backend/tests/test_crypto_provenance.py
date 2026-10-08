@@ -154,12 +154,12 @@ async def test_manual_daily_provenance_conflicts(client, test_sessionmaker, lega
     created = await client.post("/assets", json={"name": "Native", "asset_class": "other", "currency": "RUB", "value": "400000"})
     id_ = created.json()["id"]
     path = f"/assets/{id_}/valuations"
-    assert (await client.post(path, json={"value": "500000"})).status_code == 200
+    assert (await client.post(path, json={"value": "500000", "expected_currency": "RUB"})).status_code == 200
     async with test_sessionmaker() as session:
         await session.execute(text("UPDATE asset_valuations SET currency=:currency,currency_confirmed=:confirmed WHERE asset_id=:id"), {"id": id_, "currency": None if legacy else "USD", "confirmed": not legacy})
         await session.commit()
     before = await valuations(client, id_)
-    response = await client.post(path, json={"value": "7"})
+    response = await client.post(path, json={"value": "7", "expected_currency": "RUB"})
     assert response.status_code == 409 and response.json()["detail"] == "valuation_provenance_conflict"
     assert await valuations(client, id_) == before
     assert (await client.patch(f"/assets/{id_}", json={"currency": "VND"})).status_code == 409
@@ -231,20 +231,21 @@ async def test_currency_change_wins_writer_lock(client, test_sessionmaker, monke
         if writer == "transaction":
             task = asyncio.create_task(client.post(f"/crypto/holdings/{id_}/transactions", json={"type": "buy", "quantity": "1", "price_per_unit": "20", "date": "2099-01-01"}))
         else:
-            task = asyncio.create_task(client.post(f"/assets/{id_}/valuations", json={"value": "0", "as_of_date": "2099-01-01"}))
+            task = asyncio.create_task(client.post(f"/assets/{id_}/valuations", json={"value": "0", "as_of_date": "2099-01-01", "expected_currency": "USD"}))
         try:
             await wait_blocked(test_sessionmaker, pid)
             await blocker.execute(text("UPDATE assets SET currency='RUB' WHERE id=:id"), {"id": id_})
             await blocker.execute(text("UPDATE crypto_holdings SET last_price=NULL,last_price_currency=NULL,last_price_as_of_date=NULL WHERE asset_id=:id"), {"id": id_})
             await blocker.commit()
             response = await asyncio.wait_for(task, 5)
-            assert response.status_code == (201 if writer == "transaction" else 200)
+            assert response.status_code == (201 if writer == "transaction" else 409)
             if writer == "valuation":
-                assert (await valuations(client, id_))[0]["currency"] == "RUB"
+                assert response.json()["detail"] == "asset_currency_mismatch"
+                assert await valuations(client, id_) == []
             else:
                 # Quote is settings denomination, independent of native Asset currency.
                 assert (await client.get(f"/crypto/holdings/{id_}/transactions")).json()[0]["quote_currency"] == "USD"
-            assert (await client.patch(f"/assets/{id_}", json={"currency": "VND"})).status_code == 409
+            assert (await client.patch(f"/assets/{id_}", json={"currency": "VND"})).status_code == (409 if writer == "transaction" else 200)
         finally:
             await blocker.rollback()
             if not task.done():

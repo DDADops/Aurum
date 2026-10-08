@@ -51,7 +51,7 @@ def test_shared_decimal_bounds_and_domain_rules():
         with pytest.raises(ValidationError):
             valuation.validate_python(value)
     assert AssetUpdate(monthly_cash_flow="-0.000001").monthly_cash_flow == Decimal("-0.000001")
-    assert AssetValuationCreate(value="0").value == 0
+    assert AssetValuationCreate(value="0", expected_currency="USD").value == 0
     assert AppSettingsUpdate(idle_cash_threshold_amount="0").idle_cash_threshold_amount == 0
     assert GoalContributionCreate(amount="-0.000001", date=date.today()).amount < 0
     with pytest.raises(ValidationError):

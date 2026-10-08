@@ -246,6 +246,7 @@ export type CapitalRole = "income" | "neutral" | "drain";
 export type RiskLevel = "low" | "medium" | "high";
 
 export interface Asset {
+  has_monetary_history: boolean;
   valuation_currency: string | null;
   valuation_currency_confirmed: boolean;
   id: number;
@@ -263,7 +264,7 @@ export interface Asset {
 export interface AssetInput {
   name: string;
   asset_class: AssetClass;
-  currency?: string;
+  currency: string;
   notes?: string | null;
   capital_role?: CapitalRole;
   monthly_cash_flow?: string | null;
@@ -273,6 +274,7 @@ export interface AssetInput {
 }
 
 export interface AssetUpdateInput {
+  currency?: string;
   name?: string;
   asset_class?: AssetClass;
   notes?: string | null;
@@ -282,6 +284,7 @@ export interface AssetUpdateInput {
 }
 
 export interface AssetValuationInput {
+  expected_currency: string;
   value: string;
   as_of_date: string;
 }

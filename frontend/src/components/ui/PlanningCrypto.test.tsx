@@ -36,7 +36,7 @@ const noop = () => {};
 const budget: Budget = { id: 1, category_id: 1, category_name: "Food", category_color: "#123456", category_icon: null, monthly_limit: "10000", currency: "RUB" };
 const goal: Goal = { id: 1, name: "Trip", currency: "USD", target_amount: "1000", target_date: null, current_amount: "250", remaining: "750", percent: 25, is_reached: false };
 const tx: CryptoTransaction = { id: 1, asset_id: 1, type: "buy", quantity: "0.5", price_per_unit: "100000.123456789123456789", quote_currency: "RUB", date: "2026-01-01", note: null };
-const asset: Asset = { id: 1, name: "Native asset", asset_class: "other", currency: "RUB", current_value: "10000", monthly_cash_flow: "100", valuation_currency: "RUB", valuation_currency_confirmed: true, as_of_date: "2026-01-01", capital_role: "income", risk_level: "low", notes: null };
+const asset: Asset = { has_monetary_history: true, id: 1, name: "Native asset", asset_class: "other", currency: "RUB", current_value: "10000", monthly_cash_flow: "100", valuation_currency: "RUB", valuation_currency_confirmed: true, as_of_date: "2026-01-01", capital_role: "income", risk_level: "low", notes: null };
 let box: HTMLDivElement, root: ReturnType<typeof createRoot>, client: QueryClient;
 let settings: { currency: string };
 let transactions: CryptoTransaction[];

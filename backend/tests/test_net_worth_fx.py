@@ -210,9 +210,9 @@ async def test_asset_observation_value_and_fx_forward_fill_together(client, test
     id_ = await asset(client)
     await rate(test_sessionmaker, "EUR", "USD", "2")
     await rate(test_sessionmaker, "EUR", "USD", "3", JAN2)
-    response = await client.post(f"/assets/{id_}/valuations", json={"value": "2000", "as_of_date": TODAY.isoformat()})
+    response = await client.post(f"/assets/{id_}/valuations", json={"expected_currency": "EUR", "value": "2000", "as_of_date": TODAY.isoformat()})
     assert response.status_code == 200, response.text
-    response = await client.post(f"/assets/{id_}/valuations", json={"value": "9000", "as_of_date": "2026-01-04"})
+    response = await client.post(f"/assets/{id_}/valuations", json={"expected_currency": "EUR", "value": "9000", "as_of_date": "2026-01-04"})
     assert response.status_code == 200
     body = await summary(client)
     assert values(body) == [Decimal(2000), Decimal(2000), Decimal(6000)]

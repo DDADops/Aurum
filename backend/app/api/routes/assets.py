@@ -94,6 +94,8 @@ async def add_asset_valuation(
     same date updates the value only in the same confirmed denomination.
     Different or unknown daily provenance requires explicit reconciliation."""
     asset = await lock_asset(session, asset_id)
+    if payload.expected_currency != asset.currency:
+        raise HTTPException(status_code=409, detail="asset_currency_mismatch")
     await write_valuation(session, asset_id, payload.value, payload.as_of_date, asset.currency)
     await session.commit()
 

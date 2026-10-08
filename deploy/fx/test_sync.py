@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -38,7 +39,7 @@ class DeploymentTests(unittest.TestCase):
         }, clear=True)
         env.start()
         self.addCleanup(env.stop)
-        self.runner = patch.object(sync.subprocess, "run", return_value=result()).start()
+        self.runner = patch.object(sync, "capture_child", return_value=result()).start()
         self.addCleanup(patch.stopall)
 
     def call(self, args=()):
@@ -70,7 +71,6 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn(SECRET, str(args))
         self.assertNotIn("uvicorn", args)
         self.assertNotIn("alembic", args)
-        self.assertEqual(self.runner.call_args.kwargs["stderr"], subprocess.DEVNULL)
         self.assertFalse((self.state / "cursor.json").exists())
 
     def test_missed_dates_recovered_in_bounded_batches(self):
@@ -160,6 +160,42 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(self.call()[0], 2)
         self.runner.assert_not_called()
 
+    def test_corrupt_cursors_are_rejected_without_changes(self):
+        today = sync.datetime.now(sync.timezone.utc).date()
+        base = {"through": "2020-01-01", "currencies": "RUB,EUR,VND,CNY"}
+        invalid = [" " * 4097, "[" * 1100, "{", "null", "[]", '"secret"', "{}",
+                   '{"through":"2020-01-01","through":"2020-01-02","currencies":"RUB,EUR,VND,CNY"}']
+        for value in [None, 42, "20200101", "1998-12-31", today.isoformat(),
+                      (today + sync.timedelta(days=1)).isoformat(), "2020-02-30"]:
+            invalid.append(json.dumps({**base, "through": value}))
+        for value in [None, [], "", "rub", "RUB,RUB", "USD", "EUR"]:
+            invalid.append(json.dumps({**base, "currencies": value}))
+        invalid.append(json.dumps({**base, "unexpected": SECRET}))
+        for payload in invalid:
+            with self.subTest(payload=payload):
+                cursor = self.state / "cursor.json"
+                cursor.write_text(payload)
+                code, output = self.call()
+                self.assertEqual(code, 2)
+                self.assertIn("invalid_cursor", output)
+                self.assertEqual(cursor.read_text(), payload)
+        self.runner.assert_not_called()
+
+    def test_oversized_child_output_preserves_cursor(self):
+        self.runner.side_effect = sync.OutputLimitExceeded
+        code, output = self.call()
+        self.assertEqual(code, 70)
+        self.assertIn("compose_output_limit_exceeded", output)
+        self.assertFalse((self.state / "cursor.json").exists())
+
+    def test_malformed_reports_do_not_advance_cursor(self):
+        for payload in [b"\xff", b"null", b"[]", b"{}", b'{"exit_code":0,"exit_code":0}',
+                        result().stdout.replace('"exit_code": 0', '"exit_code": false')]:
+            with self.subTest(payload=payload):
+                self.runner.return_value = subprocess.CompletedProcess([], 0, payload)
+                self.assertEqual(self.call()[0], 70)
+                self.assertFalse((self.state / "cursor.json").exists())
+
     def test_systemd_configuration(self):
         service = (HERE / "aurum-fx.service").read_text()
         timer = (HERE / "aurum-fx.timer").read_text()
@@ -170,6 +206,52 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("Persistent=true", timer)
         self.assertIn("OnCalendar=*-*-* 03:15:00 UTC", timer)
         self.assertIn("Unit=aurum-fx.service", timer)
+
+
+class ChildCaptureTests(unittest.TestCase):
+    def test_real_child_normal_exit_and_exact_limit(self):
+        for size in (10, sync.MAX_STDOUT_BYTES):
+            result = sync.capture_child([sys.executable, "-c",
+                f"import sys; sys.stdout.buffer.write(b'x' * {size}); sys.stderr.write('secret'); sys.exit(4)"])
+            self.assertEqual(result.returncode, 4)
+            self.assertEqual(result.stdout, b"x" * size)
+
+    def test_oversized_child_is_terminated_and_reaped(self):
+        original = subprocess.Popen
+        children = []
+        def spawn(*args, **kwargs):
+            child = original(*args, **kwargs)
+            children.append(child)
+            return child
+        # The child ignores SIGTERM; exercise the bounded wait / SIGKILL fallback.
+        script = ("import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                  "os.write(1, b'x' * 65537); time.sleep(60)")
+        with patch.object(sync.subprocess, "Popen", side_effect=spawn):
+            with self.assertRaises(sync.OutputLimitExceeded):
+                sync.capture_child([sys.executable, "-c", script])
+        child = children[0]
+        self.assertIsNotNone(child.returncode)
+        self.assertTrue(child.stdout.closed)
+        with self.assertRaises(ChildProcessError):
+            os.waitpid(child.pid, os.WNOHANG)
+
+    def test_reader_never_accumulates_more_than_limit(self):
+        from unittest.mock import MagicMock
+        child = MagicMock()
+        child.__enter__.return_value = child
+        child.poll.return_value = None
+        sizes = []
+        def read(size):
+            sizes.append(size)
+            return b"x" * size
+        child.stdout.read.side_effect = read
+        with patch.object(sync.subprocess, "Popen", return_value=child):
+            with self.assertRaises(sync.OutputLimitExceeded):
+                sync.capture_child(["docker"])
+        self.assertEqual(sum(sizes), sync.MAX_STDOUT_BYTES + 1)
+        self.assertLessEqual(max(sizes), 8192)
+        child.terminate.assert_called_once()
+        child.wait.assert_called_once_with(timeout=2)
 
 
 if __name__ == "__main__":

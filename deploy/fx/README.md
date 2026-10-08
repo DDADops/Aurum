@@ -213,3 +213,21 @@ Linux host before enabling the timer.
 
 References: [Compose run semantics](https://docs.docker.com/reference/cli/docker/compose/run/)
 and [systemd timer semantics](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html).
+
+### Wrapper input/output bounds
+
+Persisted cursors are validated separately from ingestion request dates. The
+cursor must be a JSON object containing only `through` (canonical ISO date,
+1999-01-01 through yesterday UTC) and `currencies` (unique uppercase quote codes,
+matching the configured list). Duplicate keys, corrupt/oversized JSON, current
+or future dates are rejected with `invalid_cursor` (exit 2), without resetting
+or advancing state. Cursor files are limited to 4 KiB.
+
+Compose stdout is read incrementally, with a 64 KiB limit and a one-byte
+oversize probe. Excess output produces `compose_output_limit_exceeded` (exit 70)
+and no cursor update. The child is terminated and reaped; after two seconds
+without termination it is killed and reaped. Raw output is never logged.
+Valid CLI reports retain their exit codes; malformed successful reports fail
+with exit 70. Docker-managed containers may outlive a killed Compose client;
+use the existing orphan-container check before retrying. Scheduling and restore
+maintenance coordination are unchanged.

@@ -76,7 +76,7 @@ it("edits existing RUB independently of Settings and locks history", async () =>
   const selector = container.querySelector<HTMLSelectElement>("#asset-currency")!;
   expect(selector.value).toBe("RUB"); expect(selector.disabled).toBe(true);
   await submit(); expect(assetsApi.addAssetValuation).not.toHaveBeenCalled();
-  expect(assetsApi.updateAsset).toHaveBeenCalledWith(1, expect.objectContaining({ currency: "RUB" }));
+  expect(assetsApi.updateAsset).toHaveBeenCalledWith(1, expect.not.objectContaining({ currency: expect.anything() }));
 });
 it.each(["replace", "clear"])("requires explicit cash flow %s on no-history currency change", async (action) => {
   await render({ ...asset, has_monetary_history: false }); select("VND"); await submit();
@@ -145,4 +145,48 @@ it("restores original cash flow when an unsaved currency choice is reverted", as
   await render({ ...asset, has_monetary_history: false }); select("VND"); select("RUB"); await submit();
   expect(assetsApi.updateAsset).toHaveBeenCalledWith(1, expect.not.objectContaining({ monthly_cash_flow: expect.anything() }));
   expect(container.querySelector<HTMLInputElement>("#asset-cash-flow")!.value).toBe(asset.monthly_cash_flow);
+});
+
+async function externalCurrencyChange() {
+  const newer = { ...asset, currency: "VND", has_monetary_history: false, monthly_cash_flow: "700" };
+  vi.mocked(assetsApi.fetchAssets).mockResolvedValue([newer]);
+  act(() => client.setQueryData(["assets"], [newer]));
+  await settle();
+}
+it("saves metadata after external RUB -> VND without reverting currency or cash flow", async () => {
+  await render({ ...asset, has_monetary_history: false });
+  input("asset-name", "Renamed"); await externalCurrencyChange(); await submit();
+  expect(assetsApi.updateAsset).toHaveBeenCalledWith(1, {
+    name: "Renamed", asset_class: "other", notes: null, capital_role: "income", risk_level: "low",
+  });
+  expect(assetsApi.addAssetValuation).not.toHaveBeenCalled();
+  expect(client.getQueryData<Asset[]>(["assets"])![0].currency).toBe("VND");
+  expect(container.textContent).toContain(t("netWorth.form.staleCurrency"));
+});
+it("rejects explicit RUB -> USD when authoritative currency changed to VND", async () => {
+  await render({ ...asset, has_monetary_history: false }); select("USD");
+  input("asset-cash-flow", "12.000001"); await externalCurrencyChange();
+  const calls = vi.mocked(assetsApi.fetchAssets).mock.calls.length;
+  await submit();
+  expect(assetsApi.updateAsset).not.toHaveBeenCalled(); expect(assetsApi.addAssetValuation).not.toHaveBeenCalled();
+  expect(close).not.toHaveBeenCalled();
+  expect(container.textContent).toContain(t("netWorth.form.staleCurrency"));
+  expect(container.querySelector<HTMLSelectElement>("#asset-currency")!.value).toBe("USD");
+  expect(container.querySelector<HTMLInputElement>("#asset-cash-flow")!.value).toBe("12.000001");
+  expect(vi.mocked(assetsApi.fetchAssets).mock.calls.length).toBeGreaterThan(calls);
+});
+it.each(["asset-cash-flow", "asset-value"])("preserves stale %s input without reinterpreting it as VND", async (field) => {
+  await render({ ...asset, has_monetary_history: false }); input(field, "123.000001");
+  await externalCurrencyChange(); await submit();
+  expect(assetsApi.updateAsset).not.toHaveBeenCalled(); expect(assetsApi.addAssetValuation).not.toHaveBeenCalled();
+  expect(close).not.toHaveBeenCalled();
+  expect(container.querySelector<HTMLInputElement>(`#${field}`)!.value).toBe("123.000001");
+  expect(container.textContent).toContain(t("netWorth.form.staleCurrency"));
+});
+it("keeps initialization baseline when the asset prop itself is refreshed", async () => {
+  await render({ ...asset, has_monetary_history: false }); select("USD"); input("asset-cash-flow", "12");
+  await externalCurrencyChange();
+  await render({ ...asset, has_monetary_history: false, currency: "VND" });
+  await submit(); expect(assetsApi.updateAsset).not.toHaveBeenCalled();
+  expect(container.textContent).toContain(t("netWorth.form.staleCurrency"));
 });

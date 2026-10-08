@@ -38,9 +38,11 @@ const EMPTY_FORM = {
 export function AssetFormModal({ open, onClose, asset }: AssetFormModalProps) {
   const { t, language } = useTranslation();
   const { data: settings } = useAppSettings();
-  const { data: assets } = useAssets();
+  const { data: assets, refetch: refetchAssets } = useAssets();
   const authoritativeAsset = assets?.find((row) => row.id === asset?.id) ?? asset;
   const initialized = useRef(false);
+  const initialAsset = useRef<Asset | null>(null);
+  const [currencySelected, setCurrencySelected] = useState(false);
   const [cashFlowResolved, setCashFlowResolved] = useState(false);
   const createAsset = useCreateAsset();
   const updateAsset = useUpdateAsset();
@@ -57,6 +59,8 @@ export function AssetFormModal({ open, onClose, asset }: AssetFormModalProps) {
     if (initialized.current || (!asset && !settings)) return;
     initialized.current = true;
     setCashFlowResolved(false);
+    setCurrencySelected(false);
+    initialAsset.current = asset ? { ...asset } : null;
     if (asset) {
       setForm({
         currency: asset.currency,
@@ -75,8 +79,11 @@ export function AssetFormModal({ open, onClose, asset }: AssetFormModalProps) {
     setError(null);
   }, [open, asset, settings]);
 
-  const currencyChanged = !!asset && form.currency !== asset.currency;
-  const cashFlowNeedsResolution = currencyChanged && asset.monthly_cash_flow !== null;
+  const baseline = initialAsset.current;
+  const currencyChanged = currencySelected && !!baseline && form.currency !== baseline.currency;
+  const cashFlowChanged = !!baseline && form.monthly_cash_flow !== (baseline.monthly_cash_flow ?? "");
+  const staleCurrency = !!baseline && !!authoritativeAsset && authoritativeAsset.currency !== baseline.currency;
+  const cashFlowNeedsResolution = currencyChanged && baseline?.monthly_cash_flow !== null;
 
   const isSaving = createAsset.isPending || updateAsset.isPending || addValuation.isPending;
 
@@ -84,6 +91,11 @@ export function AssetFormModal({ open, onClose, asset }: AssetFormModalProps) {
     event.preventDefault();
     setError(null);
 
+    if (staleCurrency && (currencyChanged || cashFlowChanged || form.value !== "")) {
+      setError(t("netWorth.form.staleCurrency"));
+      await refetchAssets();
+      return;
+    }
     if (cashFlowNeedsResolution && !cashFlowResolved) {
       setError(t("netWorth.form.cashFlowReplacement"));
       return;
@@ -94,12 +106,12 @@ export function AssetFormModal({ open, onClose, asset }: AssetFormModalProps) {
         await updateAsset.mutateAsync({
           id: asset.id,
           input: {
-            currency: form.currency,
+            ...(currencyChanged ? { currency: form.currency } : {}),
             name: form.name,
             asset_class: form.asset_class,
             notes: form.notes || null,
             capital_role: form.capital_role,
-            ...(currencyChanged || form.monthly_cash_flow !== (asset.monthly_cash_flow ?? "")
+            ...(currencyChanged || cashFlowChanged
               ? { monthly_cash_flow: form.monthly_cash_flow || null } : {}),
             risk_level: form.risk_level,
           },
@@ -120,6 +132,11 @@ export function AssetFormModal({ open, onClose, asset }: AssetFormModalProps) {
           monthly_cash_flow: form.monthly_cash_flow || null,
           risk_level: form.risk_level,
         });
+      }
+      if (staleCurrency) {
+        setError(t("netWorth.form.staleCurrency"));
+        await refetchAssets();
+        return;
       }
       onClose();
     } catch (error) {
@@ -169,9 +186,10 @@ export function AssetFormModal({ open, onClose, asset }: AssetFormModalProps) {
             <Select id="asset-currency" required value={form.currency}
               disabled={!!authoritativeAsset && authoritativeAsset.has_monetary_history !== false}
               onChange={(event) => {
+                setCurrencySelected(true);
                 setForm((prev) => ({
                   ...prev, currency: event.target.value, value: "",
-                  monthly_cash_flow: event.target.value === asset?.currency ? asset.monthly_cash_flow ?? "" : "",
+                  monthly_cash_flow: event.target.value === baseline?.currency ? baseline.monthly_cash_flow ?? "" : "",
                 }));
                 setCashFlowResolved(false);
               }}>

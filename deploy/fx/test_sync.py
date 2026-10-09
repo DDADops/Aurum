@@ -65,6 +65,12 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(args[args.index("backend") + 1:][:3], ["python", "-m", "scripts.sync_fx"])
         self.assertIn("--no-deps", args)
         self.assertIn("--rm", args)
+        self.assertIn("-T", args)
+        self.assertEqual(args[args.index("--name") + 1], "aurum-fx-sync")
+        self.assertNotIn("--pull", args)
+        self.assertNotIn("--build", args)
+        self.assertEqual([args[i + 1] for i, arg in enumerate(args) if arg == "-f"],
+                         ["docker-compose.yml", "deploy/fx/compose.yml"])
         self.assertIn("--dry-run", args)
         self.assertIn("AURUM_OXR_APP_ID", args)
         self.assertIn("AURUM_FX_PROVIDER=oxr", args)
@@ -73,6 +79,14 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn("uvicorn", args)
         self.assertNotIn("alembic", args)
         self.assertFalse((self.state / "cursor.json").exists())
+
+    def test_fx_override_disables_pull_and_implicit_build(self):
+        override = (HERE / "compose.yml").read_text()
+        self.assertIn("    build: !reset null", override)
+        self.assertIn("    pull_policy: never", override)
+        self.assertIn('${AURUM_FX_COMPOSE_PROJECT:?Set the existing Compose project name}-backend', override)
+        # The ordinary deployment must retain its build configuration.
+        self.assertIn("    build: ./backend", (ROOT / "docker-compose.yml").read_text())
 
     def test_missed_dates_recovered_in_bounded_batches(self):
         self.assertEqual(self.call()[0], 0)
@@ -238,6 +252,22 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("Persistent=true", timer)
         self.assertIn("OnCalendar=*-*-* 03:15:00 UTC", timer)
         self.assertIn("Unit=aurum-fx.service", timer)
+
+
+class ComposeConfigTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("AURUM_TEST_COMPOSE_BINARY"), "Optional real Compose config check")
+    def test_merged_config_has_no_build_and_never_pulls(self):
+        completed = subprocess.run([
+            os.environ["AURUM_TEST_COMPOSE_BINARY"], "--project-name", "aurum-compat-test",
+            "--env-file", str(ROOT / ".env.example"),
+            "-f", str(ROOT / "docker-compose.yml"), "-f", str(HERE / "compose.yml"),
+            "config", "--format", "json",
+        ], env={"PATH": os.defpath, "AURUM_FX_COMPOSE_PROJECT": "aurum-compat-test"},
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True)
+        backend = json.loads(completed.stdout)["services"]["backend"]
+        self.assertNotIn("build", backend)
+        self.assertEqual(backend["pull_policy"], "never")
+        self.assertEqual(backend["image"], "aurum-compat-test-backend")
 
 
 class ChildCaptureTests(unittest.TestCase):

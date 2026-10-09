@@ -91,7 +91,7 @@ systemctl enable --now aurum-fx.timer
 The underlying Compose command is equivalent to:
 
 ```sh
-docker compose --project-name "$AURUM_FX_COMPOSE_PROJECT" --env-file .env -f docker-compose.yml run --rm --no-deps --pull never -T -e AURUM_OXR_APP_ID backend python -m scripts.sync_fx --from 2020-01-01 --to 2020-01-07 --currencies RUB,EUR,VND,CNY --dry-run
+docker compose --project-name "$AURUM_FX_COMPOSE_PROJECT" --env-file .env -f docker-compose.yml -f deploy/fx/compose.yml run --rm --no-deps -T -e AURUM_OXR_APP_ID backend python -m scripts.sync_fx --from 2020-01-01 --to 2020-01-07 --currencies RUB,EUR,VND,CNY --dry-run
 ```
 
 Use the **wrapper** operationally: direct Compose commands bypass the host
@@ -296,3 +296,26 @@ An available sample snapshot cannot prove availability of all historical dates.
 A read-only live adapter check of `2024-03-06` during this implementation returned
 all 38 supported foreign-currency observations with valid Decimal values and
 USD identity. It performed no database writes; other dates were not verified.
+
+
+### Compose 2.26.1 compatibility
+
+The wrapper includes `deploy/fx/compose.yml` after the base file. This FX-only
+override sets `pull_policy: never`, explicitly selects the existing standard
+Compose image `<project>-backend`, and removes `build` with `!reset null`.
+Compose 2.26.1 lacks the `run --pull` flag. A pull policy alone would not prevent
+implicit builds when the image is absent, so both restrictions are required.
+A missing local image causes failure; prepare it via the normal deployment
+procedure, never during the scheduler run. If your deployment uses a custom
+image tag, adapt the override's `image` to that existing local image first.
+Do not use this override for normal `up` or `build` operations. Keep it last
+if adding deployment-specific configuration files.
+
+Optional daemon-free compatibility test with a locally available Compose binary:
+
+```sh
+AURUM_TEST_COMPOSE_BINARY=/path/to/docker-compose python3 -m unittest discover -s deploy/fx -v
+```
+
+The test uses `.env.example`, not production secrets, and checks the merged
+configuration for the expected local image, absent build and `pull_policy: never`.

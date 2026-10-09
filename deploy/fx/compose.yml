@@ -1,0 +1,6 @@
+# FX-only override for Compose 2.26.1. Never use for normal deployment/builds.
+services:
+  backend:
+    image: "${AURUM_FX_COMPOSE_PROJECT:?Set the existing Compose project name}-backend"
+    build: !reset null
+    pull_policy: never

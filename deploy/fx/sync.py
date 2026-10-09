@@ -105,8 +105,8 @@ def capture_child(argv):
 def command(start, end, currencies, dry_run):
     provider = os.environ.get("AURUM_FX_PROVIDER", "oxr")
     args = ["docker", "compose", "--project-name", os.environ["AURUM_FX_COMPOSE_PROJECT"],
-            "--env-file", ".env", "-f", "docker-compose.yml", "run", "--rm", "--no-deps",
-            "--pull", "never", "-T", "--name", os.environ["AURUM_FX_COMPOSE_PROJECT"] + "-fx-sync",
+            "--env-file", ".env", "-f", "docker-compose.yml", "-f", "deploy/fx/compose.yml",
+            "run", "--rm", "--no-deps", "-T", "--name", os.environ["AURUM_FX_COMPOSE_PROJECT"] + "-fx-sync",
             "-e", "AURUM_FX_PROVIDER=" + provider,
             *(["-e", "AURUM_OXR_APP_ID"] if provider == "oxr" else []),
             "backend", "python", "-m", "scripts.sync_fx",

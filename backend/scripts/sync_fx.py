@@ -8,6 +8,7 @@ from datetime import date, timedelta
 from app.core.currency import SUPPORTED_CURRENCIES
 from app.services.fx_ingestion_service import IngestionReport, ingest_rates
 from app.services.fx_providers.openexchangerates import MAX_DAYS, SOURCE, OpenExchangeRatesProvider, validate_request
+from app.services.fx_providers.fawaz import FawazProvider, SOURCE as FAWAZ_SOURCE
 
 
 class SafeParser(argparse.ArgumentParser):
@@ -39,7 +40,15 @@ async def run_cli(argv=None) -> int:
     try:
         currencies, dates, dry_run = parse_request(argv)
         report = IngestionReport([day.isoformat() for day in dates], dry_run)
-        provider = OpenExchangeRatesProvider(os.environ.get("AURUM_OXR_APP_ID", ""))
+        selection = os.environ.get("AURUM_FX_PROVIDER", "oxr")
+        if selection == "oxr":
+            provider = OpenExchangeRatesProvider(os.environ.get("AURUM_OXR_APP_ID", ""))
+            source = SOURCE
+        elif selection == "fawaz":
+            provider = FawazProvider()
+            source = FAWAZ_SOURCE
+        else:
+            raise ValueError("invalid_provider")
     except ValueError:
         report.errors = ["invalid_arguments_or_missing_credentials"]
         report.exit_code = 2
@@ -49,7 +58,7 @@ async def run_cli(argv=None) -> int:
             from app.db.session import AsyncSessionLocal, engine
             try:
                 report = await ingest_rates(provider, AsyncSessionLocal, currencies=currencies,
-                                            dates=dates, source=SOURCE, dry_run=dry_run)
+                                            dates=dates, source=source, dry_run=dry_run)
             finally:
                 await engine.dispose()
         except Exception:

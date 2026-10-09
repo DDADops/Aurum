@@ -8,7 +8,7 @@ from sqlalchemy import select, text
 from app.models.fx import FxRate
 from app.schemas.fx import FxObservation
 from app.services.fx_provider import FxProvider
-from app.services.fx_providers.openexchangerates import ProviderError, validate_request
+from app.services.fx_providers.common import ProviderError, validate_request
 from app.services.fx_service import upsert_observation
 
 

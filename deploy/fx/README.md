@@ -15,8 +15,9 @@ conflict-rejecting ingestion policy are unchanged.
 - These units assume the base `docker-compose.yml` and `/opt/aurum/.env`. If your
   deployment changes database/network configuration in overrides, adapt the
   wrapper's Compose file list before installation and test against that stack.
-- Accurate host UTC clock and outbound HTTPS access to Open Exchange Rates.
-  Confirm your API plan permits historical requests and your quota is sufficient.
+- Accurate host UTC clock and outbound HTTPS access to your selected provider.
+  For OXR confirm your plan permits historical requests and quota is sufficient.
+  Fawaz selection and availability limitations are described below.
 
 Install configuration (as root):
 
@@ -25,8 +26,8 @@ install -d -m 0700 /etc/aurum /var/lib/aurum-fx
 install -m 0600 /opt/aurum/deploy/fx/fx.env.example /etc/aurum/fx.env
 ```
 
-Edit `/etc/aurum/fx.env` with a local editor. Set `AURUM_OXR_APP_ID`, the existing
-Compose project name and a deliberate historical start date. Keep the initial
+Edit `/etc/aurum/fx.env` with a local editor. For OXR set `AURUM_OXR_APP_ID`; for Fawaz set
+`AURUM_FX_PROVIDER=fawaz` and leave the key empty. Set the existing Compose project name and a deliberate historical start date. Keep the initial
 currency list `RUB,EUR,VND,CNY`. USD is the provider base, not a requested quote.
 The start date must precede today in UTC. The real file must remain root:root,
 0600; its directory 0700. Protect `/opt/aurum/.env` (database credentials) with
@@ -217,9 +218,10 @@ and [systemd timer semantics](https://www.freedesktop.org/software/systemd/man/l
 ### Wrapper input/output bounds
 
 Persisted cursors are validated separately from ingestion request dates. The
-cursor must be a JSON object containing only `through` (canonical ISO date,
+cursor must be a JSON object containing `through` (canonical ISO date,
 1999-01-01 through yesterday UTC) and `currencies` (unique uppercase quote codes,
-matching the configured list). Duplicate keys, corrupt/oversized JSON, current
+matching the configured list), and `provider` (`oxr` or `fawaz`). Legacy cursors
+without `provider` mean OXR. Unknown fields, duplicate keys, corrupt/oversized JSON, current
 or future dates are rejected with `invalid_cursor` (exit 2), without resetting
 or advancing state. Cursor files are limited to 4 KiB.
 
@@ -231,3 +233,66 @@ Valid CLI reports retain their exit codes; malformed successful reports fail
 with exit 70. Docker-managed containers may outlive a killed Compose client;
 use the existing orphan-container check before retrying. Scheduling and restore
 maintenance coordination are unchanged.
+
+
+## Provider selection: OXR or keyless Fawaz
+
+Set `AURUM_FX_PROVIDER=oxr` (default) or `AURUM_FX_PROVIDER=fawaz` in
+`/etc/aurum/fx.env`. The existing systemd EnvironmentFile loads it; the wrapper
+passes it into the one-off container. Fawaz needs no API key and the wrapper
+never passes `AURUM_OXR_APP_ID` to its container. OXR retains its existing key
+requirement. Unknown provider names fail closed. No systemd unit change is
+needed. The configured explicit currency list remains required; it may include
+any Aurum-supported foreign currency, not just the initial four.
+
+For direct CLI use, export `AURUM_FX_PROVIDER=fawaz` in the process environment
+before running `python -m scripts.sync_fx ...`. Omitting `--currencies` requests
+all supported foreign currencies. USD is the base/identity, not a stored
+USD/USD observation. The CLI does not load provider selection from `.env` by
+itself. Existing OXR commands still default to OXR.
+
+Fawaz reads only
+`https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@YYYY-MM-DD/v1/currencies/usd.min.json`.
+It requires an exact response date and USD identity, parses numbers as Decimal,
+and persists `source=fawazahmed0:historical:USD`. Missing currencies abort the
+batch before writing; missing dates/HTTP errors fail explicitly. There is no
+`latest`, prior-day, derived-rate or cross-provider fallback. Three bounded
+attempts apply to transient HTTP/transport failures, with the existing streaming
+2 MB cap. A failure of this CDN is deliberately visible rather than silently
+switching endpoints or dates. Both providers use the same atomic conflict policy.
+
+**Switching providers requires an explicit historical coverage review.** The
+cursor now records its provider. A legacy cursor with no provider belongs to
+OXR; it is not adopted by Fawaz. A mismatch produces `invalid_cursor` without
+changing the cursor or calling Compose. Disable the timer and wait for active
+runs, archive the cursor, choose an explicit start date and provider, then
+perform manual dry-runs before starting a new scheduled cursor. Changing back
+also requires review. Do not merely edit the cursor's provider field: that
+would skip history. Existing OXR rows conflict with Fawaz provenance even if
+rates match; they are never overwritten. Either retain OXR for those dates or
+plan a reviewed cutover date while preserving existing history. Removing a
+cursor does not remove rates or resolve conflicts. Restore coordination is
+unchanged; use the existing maintenance protocol.
+
+### Availability and terms
+
+The [project README](https://github.com/fawazahmed0/exchange-api) advertises free,
+daily data without rate limits and documents dated npm/CDN URLs. Its
+[CC0 license](https://github.com/fawazahmed0/exchange-api/blob/main/LICENSE)
+provides the work as-is without accuracy warranties. This is not an SLA or a
+promise that every date/currency is archived. The
+[migration guide](https://github.com/fawazahmed0/exchange-api/blob/main/MIGRATION.md)
+documents a previous endpoint change. The README recommends a Cloudflare
+fallback; this minimal adapter does not enable it. CDN policies and availability
+remain external dependencies; see [jsDelivr terms](https://www.jsdelivr.com/terms/terms-of-use).
+The terms page's document text was not available through the documentation
+reader during implementation, so no unlimited-service guarantee is inferred.
+
+Use short dated dry-runs to establish coverage before backfill. The generic CLI
+lower date bound is not a claim that Fawaz supports dates back to 1999. One date
+uses one request (up to three with retries); avoid unnecessary repeated runs.
+An available sample snapshot cannot prove availability of all historical dates.
+
+A read-only live adapter check of `2024-03-06` during this implementation returned
+all 38 supported foreign-currency observations with valid Decimal values and
+USD identity. It performed no database writes; other dates were not verified.

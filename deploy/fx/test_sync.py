@@ -66,7 +66,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("--no-deps", args)
         self.assertIn("--rm", args)
         self.assertIn("--dry-run", args)
-        self.assertEqual(args[args.index("-e") + 1], "AURUM_OXR_APP_ID")
+        self.assertIn("AURUM_OXR_APP_ID", args)
+        self.assertIn("AURUM_FX_PROVIDER=oxr", args)
         self.assertEqual(args[args.index("--currencies") + 1], "RUB,EUR,VND,CNY")
         self.assertNotIn(SECRET, str(args))
         self.assertNotIn("uvicorn", args)
@@ -195,6 +196,37 @@ class DeploymentTests(unittest.TestCase):
                 self.runner.return_value = subprocess.CompletedProcess([], 0, payload)
                 self.assertEqual(self.call()[0], 70)
                 self.assertFalse((self.state / "cursor.json").exists())
+
+    def test_fawaz_without_credentials_and_provider_cursor(self):
+        os.environ["AURUM_FX_PROVIDER"] = "fawaz"
+        del os.environ["AURUM_OXR_APP_ID"]
+        self.assertEqual(self.call()[0], 0)
+        args = self.runner.call_args.args[0]
+        self.assertIn("AURUM_FX_PROVIDER=fawaz", args)
+        self.assertNotIn("AURUM_OXR_APP_ID", args)
+        self.assertEqual(json.loads((self.state / "cursor.json").read_text())["provider"], "fawaz")
+
+    def test_provider_change_cannot_skip_dates(self):
+        cursor = self.state / "cursor.json"
+        for saved_provider in (None, "oxr"):
+            saved = {"through": "2020-01-31", "currencies": "RUB,EUR,VND,CNY"}
+            if saved_provider:
+                saved["provider"] = saved_provider
+            cursor.write_text(json.dumps(saved))
+            original = cursor.read_text()
+            os.environ["AURUM_FX_PROVIDER"] = "fawaz"
+            code, output = self.call()
+            self.assertEqual(code, 2)
+            self.assertIn("invalid_cursor", output)
+            self.assertEqual(cursor.read_text(), original)
+        self.runner.assert_not_called()
+
+    def test_legacy_oxr_cursor_still_recovers(self):
+        (self.state / "cursor.json").write_text(json.dumps({
+            "through": "2020-01-31", "currencies": "RUB,EUR,VND,CNY"}))
+        self.assertEqual(self.call()[0], 0)
+        args = self.runner.call_args.args[0]
+        self.assertEqual(args[args.index("--from") + 1], "2020-02-01")
 
     def test_systemd_configuration(self):
         service = (HERE / "aurum-fx.service").read_text()

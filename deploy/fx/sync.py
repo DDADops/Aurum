@@ -54,7 +54,7 @@ def validate_currencies(value):
         raise ValueError
 
 
-def load_cursor(path, currencies):
+def load_cursor(path, currencies, provider):
     # Persisted state has its own schema; it is not a new ingestion request.
     try:
         with path.open("rb") as stream:
@@ -62,7 +62,9 @@ def load_cursor(path, currencies):
         if len(raw) > 4096:
             raise ValueError
         saved = json.loads(raw, object_pairs_hook=unique_object)
-        if not isinstance(saved, dict) or set(saved) != {"through", "currencies"}:
+        if not isinstance(saved, dict) or set(saved) not in ({"through", "currencies"}, {"through", "currencies", "provider"}):
+            raise ValueError
+        if saved.get("provider", "oxr") != provider:
             raise ValueError
         validate_currencies(saved["currencies"])
         if saved["currencies"] != currencies or not isinstance(saved["through"], str):
@@ -101,20 +103,26 @@ def capture_child(argv):
 
 
 def command(start, end, currencies, dry_run):
+    provider = os.environ.get("AURUM_FX_PROVIDER", "oxr")
     args = ["docker", "compose", "--project-name", os.environ["AURUM_FX_COMPOSE_PROJECT"],
             "--env-file", ".env", "-f", "docker-compose.yml", "run", "--rm", "--no-deps",
             "--pull", "never", "-T", "--name", os.environ["AURUM_FX_COMPOSE_PROJECT"] + "-fx-sync",
-            "-e", "AURUM_OXR_APP_ID", "backend", "python", "-m", "scripts.sync_fx",
+            "-e", "AURUM_FX_PROVIDER=" + provider,
+            *(["-e", "AURUM_OXR_APP_ID"] if provider == "oxr" else []),
+            "backend", "python", "-m", "scripts.sync_fx",
             "--from", start.isoformat(), "--to", end.isoformat(), "--currencies", currencies]
     return args + (["--dry-run"] if dry_run else [])
 
 
 def execute(args, state):
+    provider = os.environ.get("AURUM_FX_PROVIDER", "oxr")
+    if provider not in ("oxr", "fawaz"):
+        raise ValueError
     currencies = os.environ["AURUM_FX_CURRENCIES"]
     validate_currencies(currencies)
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", os.environ["AURUM_FX_COMPOSE_PROJECT"]):
         raise ValueError
-    if not re.fullmatch(r"[a-fA-F0-9]{32}", os.environ.get("AURUM_OXR_APP_ID", "")):
+    if provider == "oxr" and not re.fullmatch(r"[a-fA-F0-9]{32}", os.environ.get("AURUM_OXR_APP_ID", "")):
         raise ValueError
     cursor = state / "cursor.json"
     manual = args.start is not None or args.end is not None
@@ -123,7 +131,7 @@ def execute(args, state):
     else:
         start = completed_date(os.environ["AURUM_FX_START_DATE"])
         if cursor.exists():
-            start = load_cursor(cursor, currencies) + timedelta(days=1)
+            start = load_cursor(cursor, currencies, provider) + timedelta(days=1)
         end = min(datetime.now(timezone.utc).date() - timedelta(days=1), start + timedelta(days=30))
         if start > end:
             emit("up_to_date")
@@ -152,7 +160,7 @@ def execute(args, state):
          exit_code=result.returncode, **counts)
     if result.returncode == 0 and not manual and not args.dry_run:
         temporary = state / "cursor.tmp"
-        temporary.write_text(json.dumps({"through": end.isoformat(), "currencies": currencies}) + "\n")
+        temporary.write_text(json.dumps({"through": end.isoformat(), "currencies": currencies, "provider": provider}) + "\n")
         temporary.replace(cursor)
     return result.returncode
 
